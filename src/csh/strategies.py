@@ -95,24 +95,38 @@ def fit_platt(y, p, l2: float = 0.1):
     return float(res.x[0]), float(res.x[1])
 
 
-def em_prior(p_target, source_prior: float, max_iter: int = 100, tol: float = 1e-6):
-    """Saerens-Latinne-Decaestecker EM estimate of the target prevalence."""
+def em_prior(p_target, source_prior: float, max_iter: int = 100,
+             tol: float = 1e-6, max_ratio: float = 3.0):
+    """Saerens-Latinne-Decaestecker EM estimate of the target prevalence.
+
+    Plain EM is unstable when the source model discriminates weakly: the
+    iteration can run away to 0 or 1 (we see this on eICU, where AUROC is
+    ~0.75). We therefore damp it, constraining the estimate to within
+    `max_ratio` of the source prevalence in both directions, and report
+    whether the constraint bound (a sign the estimate is untrustworthy).
+
+    Returns (estimated_prior, hit_bound).
+    """
     p = clip(p_target)
-    if len(p) == 0:
-        return source_prior, p
     pi_s = float(np.clip(source_prior, 1e-4, 1 - 1e-4))
+    if len(p) == 0:
+        return pi_s, True
+
+    lo = max(pi_s / max_ratio, 1e-4)
+    hi = min(pi_s * max_ratio, 1 - 1e-4)
+
     pi = pi_s
     for _ in range(max_iter):
         w1 = (pi / pi_s) * p
         w0 = ((1 - pi) / (1 - pi_s)) * (1 - p)
         post = w1 / (w1 + w0)
-        new = float(np.mean(post))
-        new = float(np.clip(new, 1e-4, 1 - 1e-4))
+        new = float(np.clip(np.mean(post), lo, hi))
         if abs(new - pi) < tol:
             pi = new
             break
         pi = new
-    return pi, None
+    hit_bound = bool(pi <= lo * (1 + 1e-6) or pi >= hi * (1 - 1e-6))
+    return pi, hit_bound
 
 
 def apply_prior_shift(p, source_prior: float, target_prior: float):

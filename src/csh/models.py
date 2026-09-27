@@ -19,8 +19,8 @@ def make_model(kind: str = "hgb", **over):
     if kind == "hgb":
         params = dict(
             learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=20,
-            l2_regularization=1.0, max_iter=200, early_stopping=False,
-            random_state=SEED,
+            l2_regularization=1.0, max_iter=100, max_bins=32,
+            early_stopping=False, random_state=SEED,
         )
         params.update(over)
         return HistGradientBoostingClassifier(**params)

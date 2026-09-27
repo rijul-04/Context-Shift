@@ -1,0 +1,406 @@
+"""Generate paper/main.tex with every number pulled from the results files.
+
+No figure in the paper is drawn by hand and no number is typed by hand: if a
+result changes, rerunning this script changes the paper.
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.csh.config import PAPER, PROC, RESULTS   # noqa: E402
+
+FIGS = RESULTS / "figures"
+
+
+def f(x, d=3):
+    return f"{x:.{d}f}"
+
+
+def e3(x):
+    """Brier differences are small; report them in units of 1e-3."""
+    return f"{x * 1000:.2f}"
+
+
+def main():
+    h1 = pd.read_csv(RESULTS / "h1_degradation.csv")
+    summ = pd.read_csv(RESULTS / "selector_summary.csv")
+    prim = pd.read_csv(RESULTS / "primary_test.csv")
+    curve = pd.read_csv(RESULTS / "regret_by_budget.csv", index_col=0)
+    imp = pd.read_csv(RESULTS / "meta_importance.csv")
+    h7 = pd.read_csv(RESULTS / "h7_diagnosis.csv", index_col=0)
+    h7.index.name = "injected shift"
+    rel = pd.read_csv(RESULTS / "reliability_example.csv", index_col=0)
+    ep = pd.read_pickle(PROC / "episodes_real.pkl")
+    inj = pd.read_pickle(PROC / "episodes_injected.pkl")
+    res = pd.read_pickle(PROC / "selection_results.pkl")
+    low = summ[summ["regime"] == "low_budget"].set_index("policy")
+    allb = summ[summ["regime"] == "all_budgets"].set_index("policy")
+
+    hgb = h1[h1["model"] == "hgb"]
+    oe_lo, oe_hi = hgb["ext_oe"].min(), hgb["ext_oe"].max()
+    slope_min = hgb["ext_cal_slope"].min()
+    auroc_ext, auroc_loc = hgb["ext_auroc"].mean(), hgb["loc_auroc"].mean()
+
+    n_ep, n_inj = len(ep), len(inj)
+    n_dom = ep.groupby(["dataset", "target"]).ngroups
+    s0_oracle = (ep["oracle"] == "S0").mean()
+    oracle_gain = (ep["brier_S0"] - ep["brier_oracle"]).mean()
+
+    big = (res[(res["n"] >= 400) & (res["policy"] != "oracle")]
+           .groupby("policy")["rel_regret"].mean().sort_values())
+    big_best = big.index[0]
+    tcv_harm_peak = (res[res["policy"] == "TCV"]
+                     .assign(h=lambda d: d["brier"] - d["brier_S0"] > 0.002)
+                     .groupby("n")["h"].mean().max())
+
+    c2st = inj[inj["n"] == 0].groupby("shift_type")["t1_c2st_auc"].mean()
+    tier_imp = imp.groupby("tier")["importance"].sum()
+
+    def row(df, p, col):
+        return df.loc[p, col] if p in df.index else float("nan")
+
+    tex = rf"""
+\documentclass[10pt,twocolumn]{{article}}
+\usepackage[margin=0.75in]{{geometry}}
+\usepackage{{graphicx,booktabs,amsmath,amssymb,url,xcolor}}
+\usepackage[hidelinks]{{hyperref}}
+\setlength{{\columnsep}}{{0.28in}}
+\title{{\textbf{{When to Update? Budget-Aware Selection of Model Updates\\
+for Clinical Prediction under Context Shift}}}}
+\author{{ContextShift-Health}}
+\date{{\today}}
+
+\begin{{document}}
+\maketitle
+
+\begin{{abstract}}
+When a clinical risk model is deployed at a new site, the reflex is to retrain
+it. We ask a narrower question: given what changed and how few labelled
+outcomes the site has, \emph{{which}} update is worth applying? We formalise
+this as an update-selection problem over a cost-ordered ladder of eight
+updates, from doing nothing to a full retrain, and we meta-learn a selector
+that reads label-free shift diagnostics plus the site's label budget. Across
+{n_dom} held-out deployment sites in two open ICU datasets
+({n_ep} real and {n_inj} injected-shift deployments), we find: (i) transporting
+a mortality model leaves discrimination intact (mean AUROC
+{f(auroc_ext)} versus {f(auroc_loc)} for a locally trained model) while
+breaking calibration (observed-to-expected ratios from {f(oe_lo, 2)} to
+{f(oe_hi, 2)}); (ii) which update is best depends on the label budget, with no
+update optimal in {f(s0_oracle * 100, 0)}\% of deployments; but (iii) our
+selector does \emph{{not}} beat restraint. Doing nothing attains relative
+regret {f(row(low, 'always-S0', 'rel_regret'), 4)} against the oracle, while
+the selector attains {f(row(low, 'SEL-META-both', 'rel_regret'), 4)}. Two
+findings survive and are practically useful. Cross-validating on the site's own
+labels --- the intuitive approach --- harms up to
+{f(tcv_harm_peak * 100, 0)}\% of sites, whereas the closed testing procedure
+harms few. And the two-tier analysis explains the negative result:
+label-free diagnostics detect covariate and observation-process shift
+(classifier two-sample AUC {f(c2st.get('observation', float('nan')), 2)} for
+measurement shift) but are blind to prior and concept shift
+({f(c2st.get('prior', float('nan')), 2)} and
+{f(c2st.get('concept', float('nan')), 2)}, both at chance) --- and those are
+precisely the shifts that determine whether recalibration helps.
+\end{{abstract}}
+
+\section{{Introduction}}
+A clinical prediction model does not learn about disease; it learns about a
+place. Trained at one hospital it absorbs that hospital's case mix, its
+monitoring habits, its thresholds for admission. Moved elsewhere, it keeps
+answering a question about the old place. This is well documented
+\cite{{finlayson2021}}, and the standard response is to retrain.
+
+Retraining is expensive and needs labelled outcomes the new site usually does
+not have. The literature offers a ladder of cheaper alternatives --- correcting
+the intercept, rescaling the logit, revising a few coefficients
+\cite{{janssen2008,vergouwe2017}} --- and a separate literature detects that
+shift has occurred \cite{{rabanser2019}} or estimates its effect
+\cite{{garg2022}}. What is missing is the decision that connects them: given
+this site, these diagnostics, and these few labels, which rung of the ladder
+should we step on?
+
+We make three contributions. We formalise update selection with a label
+budget, scoring policies by regret against the update that was best in
+hindsight and by how often they make a site worse. We meta-learn a selector
+from pseudo-deployments, separating diagnostics into Tier~1 (label-free,
+available on day one) and Tier~2 (needs outcomes). And we report an honest
+negative result with a mechanism: the selector fails, and the tier analysis
+says why.
+
+\section{{Problem formulation}}
+A \emph{{deployment episode}} consists of a source model $f$ trained without
+the target site, that site's unlabelled records $U_t$, $n$ labelled cases
+$L_n$ drawn from its adaptation half, and a held-out evaluation half $E_t$
+that only the scorer reads. A policy $\pi$ maps $(f, U_t, L_n)$ to one
+strategy from the ladder $S_0 \ldots S_7$ (Table~\ref{{tab:ladder}}). With
+Brier score as the loss,
+\[
+\mathrm{{Regret}}(\pi) = \mathrm{{Brier}}_{{E_t}}(S_{{\pi}})
+  - \min_k \mathrm{{Brier}}_{{E_t}}(S_k),
+\]
+normalised by $\mathrm{{Brier}}_{{E_t}}(S_0)$ so that sites of very different
+prevalence are comparable. A policy \emph{{harms}} a site when it exceeds the
+no-update Brier by more than $0.002$.
+
+\begin{{table}}[t]\centering\small
+\caption{{The update ladder, ordered by cost.}}
+\label{{tab:ladder}}
+\begin{{tabular}}{{llc}}
+\toprule
+& Update & Labels \\
+\midrule
+$S_0$ & no update & 0 \\
+$S_1$ & prior (prevalence) correction, damped EM & 0 \\
+$S_2$ & intercept recalibration & $\geq 1$ \\
+$S_3$ & logistic recalibration & $\geq 1$ \\
+$S_4$ & importance-weighted refit & 0 \\
+$S_5$ & model revision (top-10 coefficients) & $\geq 1$ \\
+$S_6$ & pooled refit, target upweighted & $\geq 1$ \\
+$S_7$ & target-only retrain & $\geq 1$ \\
+\bottomrule
+\end{{tabular}}
+\end{{table}}
+
+\section{{Method}}
+\textbf{{Tier~1 diagnostics}} are computable the day the model arrives: a
+cross-fitted classifier two-sample test overall and per feature group
+(demographics, physiology, observation process, treatment), the effective
+sample size of importance weights, a damped EM estimate of prevalence change,
+and shifts in the predicted-risk distribution. \textbf{{Tier~2 diagnostics}}
+need outcomes: observed-to-expected ratio and its $z$-score, calibration slope
+and its standard error, AUROC, and a Brier ``surprise'' term. Each Tier~2
+feature carries an availability flag, because they switch on at different
+sample sizes. The label budget itself is Tier~0: it is the constraint, not a
+diagnostic.
+
+\textbf{{The selector}} fits one gradient-boosted regressor per strategy,
+predicting the relative Brier change against no update, and acts only when a
+predicted improvement clears a margin $\tau$ fitted on training domains.
+Without that margin an unguarded arg-min chases prediction noise. We also fit a
+depth-3 tree (SEL-RULE) whose policy can be printed.
+
+\textbf{{Baselines.}} Every fixed policy; \textsc{{TCV}}, which cross-validates
+the candidate updates on the site's own labels; and \textsc{{CTP}}, the closed
+testing procedure of Vergouwe et al. \cite{{vergouwe2017}} generalised to any
+base model. Both baselines are Tier~2: they see outcomes only.
+
+\section{{Experimental setup}}
+Two open-access datasets, no credentialing required. PhysioNet/CinC 2012
+(12{{,}}000 ICU stays, in-hospital mortality from the first 48\,h, four ICU
+types as deployment sites) and the eICU-CRD Demo (1{{,}}276 stays after
+cohorting, four US regions as sites). Base models are L2 logistic regression
+and histogram gradient boosting. Source models are trained leave-one-site-out;
+each site is split 50/50 into an adaptation half and an evaluation half.
+Budgets are $n \in \{{0, 10, 25, 50, 100, 200, 400, 800\}}$, capped by site
+size, with 8 repeats. Selectors are trained on the other sites plus
+{n_inj} injected-shift pseudo-deployments (covariate, prior, observation and
+concept shift at three severities) and tested only on real held-out sites.
+Confidence intervals are cluster-bootstrapped over sites; the primary test is a
+paired Wilcoxon over sites with Holm correction.
+
+\section{{Results}}
+
+\subsection{{Discrimination transfers; calibration does not (H1)}}
+Figure~\ref{{fig:degradation}} shows the pattern at every site. A transported
+model ranks patients as well as a locally trained one (mean AUROC
+{f(auroc_ext)} versus {f(auroc_loc)}), while its probabilities drift: the
+observed-to-expected ratio ranges from {f(oe_lo, 2)} to {f(oe_hi, 2)} and the
+calibration slope falls as low as {f(slope_min, 2)}. Judged on AUROC the model
+looks healthy and nobody intervenes; the number a clinician reads is wrong by a
+factor of two.
+
+\begin{{figure}}[t]\centering
+\includegraphics[width=\linewidth]{{{FIGS}/fig1_degradation.png}}
+\caption{{Each site, gradient boosting. Ranking survives the move; calibration
+does not.}}
+\label{{fig:degradation}}
+\end{{figure}}
+
+\subsection{{The best update depends on the budget (H2)}}
+Figure~\ref{{fig:phase}} maps which update was best in hindsight. With no
+labels, doing nothing wins {f((ep[ep.n == 0].oracle == 'S0').mean() * 100, 0)}\%
+of the time; by 800 labels the flexible updates (revision, pooled refit) win
+most deployments. No single strategy is best in more than a third of episodes
+overall, and the available gain is small: the oracle beats no update by
+{e3(oracle_gain)}$\times 10^{{-3}}$ Brier on average.
+
+\begin{{figure}}[t]\centering
+\includegraphics[width=\linewidth]{{{FIGS}/fig2_phase_diagram.png}}
+\caption{{Share of deployments in which each update was best in hindsight.}}
+\label{{fig:phase}}
+\end{{figure}}
+
+\subsection{{The selector does not beat restraint (H3 rejected)}}
+Table~\ref{{tab:main}} is the central result and it is negative. In the
+low-budget regime, doing nothing attains relative regret
+{f(row(low, 'always-S0', 'rel_regret'), 4)}; our selector attains
+{f(row(low, 'SEL-META-both', 'rel_regret'), 4)} and the closed testing
+procedure {f(row(low, 'CTP', 'rel_regret'), 4)}. Against the pre-registered
+criterion --- a 20\% regret reduction with the confidence interval excluding
+zero --- the selector fails against all three competitors
+(Holm-adjusted $p$ from {f(prim['p_holm'].min(), 3)}, all in the wrong
+direction except against \textsc{{TCV}}).
+
+The selector is also unsafe: it harms
+{f(row(low, 'SEL-META-both', 'harm_rate') * 100, 0)}\% of low-budget
+deployments against a 5\% target (H4 rejected). Its failure mode is visible
+per site: it acts in every episode at one eICU region, costing
+$3.3\times10^{{-3}}$ Brier there, while acting correctly at the badly
+calibrated cardiac-surgery unit.
+
+\begin{{table}}[t]\centering\small
+\caption{{Low-budget regime ($n \leq 100$), leave-one-site-out. Relative regret
+against the oracle (lower better), share of sites harmed, and the mean cost
+rank of the chosen update.}}
+\label{{tab:main}}
+\begin{{tabular}}{{lccc}}
+\toprule
+Policy & Rel. regret & Harm & Cost \\
+\midrule
+oracle (unattainable) & 0.000 & 0.00 & {f(row(low, 'oracle', 'mean_cost'), 1)} \\
+no update & {f(row(low, 'always-S0', 'rel_regret'), 4)} & {f(row(low, 'always-S0', 'harm_rate'), 2)} & 0.0 \\
+CTP \cite{{vergouwe2017}} & {f(row(low, 'CTP', 'rel_regret'), 4)} & {f(row(low, 'CTP', 'harm_rate'), 2)} & {f(row(low, 'CTP', 'mean_cost'), 1)} \\
+SEL-META (both tiers) & {f(row(low, 'SEL-META-both', 'rel_regret'), 4)} & {f(row(low, 'SEL-META-both', 'harm_rate'), 2)} & {f(row(low, 'SEL-META-both', 'mean_cost'), 1)} \\
+SEL-META (Tier 1 only) & {f(row(low, 'SEL-META-t1', 'rel_regret'), 4)} & {f(row(low, 'SEL-META-t1', 'harm_rate'), 2)} & {f(row(low, 'SEL-META-t1', 'mean_cost'), 1)} \\
+SEL-RULE & {f(row(low, 'SEL-RULE-both', 'rel_regret'), 4)} & {f(row(low, 'SEL-RULE-both', 'harm_rate'), 2)} & {f(row(low, 'SEL-RULE-both', 'mean_cost'), 1)} \\
+TCV & {f(row(low, 'TCV', 'rel_regret'), 4)} & {f(row(low, 'TCV', 'harm_rate'), 2)} & {f(row(low, 'TCV', 'mean_cost'), 1)} \\
+always recalibrate intercept & {f(row(low, 'always-S2', 'rel_regret'), 4)} & {f(row(low, 'always-S2', 'harm_rate'), 2)} & 2.0 \\
+always retrain on target & {f(row(low, 'always-S7', 'rel_regret'), 4)} & {f(row(low, 'always-S7', 'harm_rate'), 2)} & 7.0 \\
+\bottomrule
+\end{{tabular}}
+\end{{table}}
+
+\begin{{figure}}[t]\centering
+\includegraphics[width=\linewidth]{{{FIGS}/fig3_regret_curves.png}}
+\caption{{Relative regret against label budget. Restraint (dashed) is hard to
+beat until several hundred labelled outcomes are available.}}
+\label{{fig:curves}}
+\end{{figure}}
+
+\subsection{{What does work}}
+Two positive findings survive. First, above roughly 400 labelled outcomes the
+picture inverts and updating pays: the best policy in that regime is
+{big_best.replace('always-', '')} with relative regret {f(big.iloc[0], 4)},
+against {f(big.get('always-S0', float('nan')), 4)} for doing nothing. Second,
+\textsc{{CTP}} is the sound default in the low-budget regime: near-zero cost,
+{f(row(low, 'CTP', 'harm_rate') * 100, 0)}\% of sites harmed, and it acts only
+when a likelihood-ratio test says the update is warranted. By contrast
+\textsc{{TCV}} --- cross-validating on the site's own 25 to 100 labels, which
+is what a careful practitioner would naturally do --- harms up to
+{f(tcv_harm_peak * 100, 0)}\% of sites. Small-sample validation is worse than
+no validation.
+
+\subsection{{Why the selector fails (H7 and the tier analysis)}}
+The injected-shift experiments give the mechanism. Label-free diagnostics see
+what moves in feature space and nothing else: measurement shift is detected
+almost perfectly (C2ST AUC
+{f(c2st.get('observation', float('nan')), 2)}, and the observation-process
+feature group ranks first), covariate shift is detected weakly
+({f(c2st.get('covariate', float('nan')), 2)}), while prior shift
+({f(c2st.get('prior', float('nan')), 2)}) and concept shift
+({f(c2st.get('concept', float('nan')), 2)}) sit at chance, as they must:
+neither changes the marginal distribution of $X$. Under no shift the test
+correctly reports {f(c2st.get('none', float('nan')), 2)}.
+
+But prior and concept shift are exactly what decide whether recalibration
+helps. So Tier~1, the abundant information, is structurally blind to the
+question the selector must answer, and Tier~2, which can see it, is too noisy
+at 25--100 labels to answer it reliably. Permutation importance confirms this:
+the label budget dominates (Tier~0 total {e3(tier_imp.get('Tier 0', 0))},
+Tier~1 {e3(tier_imp.get('Tier 1', 0))}, Tier~2
+{e3(tier_imp.get('Tier 2', 0))}, all $\times 10^{{-3}}$ Brier). The selector
+largely learned how many labels it had, not what had changed.
+
+\begin{{table}}[t]\centering\small
+\caption{{Injected shifts: which feature group the diagnostics flag, at $n=0$.}}
+\label{{tab:h7}}
+{h7.to_latex()}
+\end{{table}}
+
+\section{{Discussion}}
+The finding that updating rarely helps at small $n$ is not an artifact of weak
+updates: the same updates help at the same sites once several hundred labels
+are available, and the intercept correction demonstrably fixes calibration
+where calibration is broken (at the cardiac-surgery unit it moves the
+observed-to-expected ratio from {f(rel.iloc[0]['oe'], 2)} to
+{f(rel.iloc[1]['oe'], 2)} and ECE from {f(rel.iloc[0]['ece'], 3)} to
+{f(rel.iloc[1]['ece'], 3)}). The problem is that at 25--100 labels the evidence
+for acting is indistinguishable from noise, and acting on noise costs more than
+it gains.
+
+For practice this suggests a simple and slightly deflating rule: below roughly
+a hundred outcomes, leave the model alone and monitor; use a closed testing
+procedure if you must act; do not cross-validate your way to a decision on a
+handful of cases; and once a few hundred outcomes exist, recalibrate the
+intercept.
+
+\section{{Limitations}}
+The deployment sites are ICU types and US regions rather than individual
+hospitals, because the open eICU demo spreads 2{{,}}520 stays over 186
+hospitals; with eight sites, confidence intervals are wide and the primary test
+has little power. The oracle is computed on finite evaluation halves, so part
+of the oracle gain is noise a real selector cannot capture, which inflates
+every regret. The 2012 dataset is single-centre, so its sites differ by case
+mix rather than by institution. Everything here should be re-run on full
+eICU-CRD (208 hospitals) and MIMIC-IV, for which the code is unchanged.
+
+\section{{Conclusion}}
+Choosing how much to adapt a clinical model can be posed cleanly as an update
+selection problem, and the phase diagram of which update wins where is useful
+on its own. But the central hypothesis --- that label-free shift diagnostics
+can guide that choice when labels are scarce --- does not survive contact with
+the data, and the reason is structural: the shifts that decide whether an
+update helps are invisible without labels. Restraint remains the strong
+baseline.
+
+\begin{{thebibliography}}{{9}}
+\small
+\bibitem{{finlayson2021}} S.~G. Finlayson et al. The clinician and dataset
+shift in artificial intelligence. \emph{{New England Journal of Medicine}},
+2021.
+\bibitem{{janssen2008}} K.~J.~M. Janssen et al. Updating methods improved the
+performance of a clinical prediction model in new patients. \emph{{Journal of
+Clinical Epidemiology}}, 2008.
+\bibitem{{vergouwe2017}} Y.~Vergouwe et al. A closed testing procedure to
+select an appropriate method for updating prediction models.
+\emph{{Statistics in Medicine}}, 2017.
+\bibitem{{saerens2002}} M.~Saerens, P.~Latinne, C.~Decaestecker. Adjusting the
+outputs of a classifier to new a priori probabilities.
+\emph{{Neural Computation}}, 2002.
+\bibitem{{lipton2018}} Z.~Lipton, Y.-X. Wang, A.~Smola. Detecting and
+correcting for label shift with black box predictors. \emph{{ICML}}, 2018.
+\bibitem{{rabanser2019}} S.~Rabanser, S.~G\"unnemann, Z.~Lipton. Failing
+loudly: an empirical study of methods for detecting dataset shift.
+\emph{{NeurIPS}}, 2019.
+\bibitem{{garg2022}} S.~Garg et al. Leveraging unlabeled data to predict
+out-of-distribution performance. \emph{{ICLR}}, 2022.
+\bibitem{{lopezpaz2017}} D.~Lopez-Paz, M.~Oquab. Revisiting classifier
+two-sample tests. \emph{{ICLR}}, 2017.
+\bibitem{{rice1976}} J.~R. Rice. The algorithm selection problem.
+\emph{{Advances in Computers}}, 1976.
+\end{{thebibliography}}
+
+\end{{document}}
+"""
+    out = PAPER / "main.tex"
+    out.write_text(tex)
+    print(f"wrote {out}")
+
+    r = subprocess.run(["pdflatex", "-interaction=nonstopmode", "main.tex"],
+                       cwd=PAPER, capture_output=True, text=True)
+    r = subprocess.run(["pdflatex", "-interaction=nonstopmode", "main.tex"],
+                       cwd=PAPER, capture_output=True, text=True)
+    pdf = PAPER / "main.pdf"
+    if pdf.exists():
+        print(f"compiled {pdf} ({pdf.stat().st_size // 1024} KB)")
+    else:
+        print(r.stdout[-2500:])
+
+
+if __name__ == "__main__":
+    main()

@@ -13,7 +13,7 @@ SEED = 20260921
 
 # Deployment-episode settings
 BUDGETS = [0, 10, 25, 50, 100, 200, 400, 800]
-N_REPEATS = 10           # day-1 setting; 20 in the full re-run
+N_REPEATS = 8            # day-1 setting; 20 in the full re-run
 N_REPEATS_INJECTED = 3
 LOW_BUDGET_MAX = 100     # "low-budget regime" for the primary test
 DELTA_HARM = 0.002       # Brier worsening vs S0 that counts as harm

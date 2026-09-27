@@ -1,0 +1,6 @@
+shift_type,G1,G2,G3,G4
+concept,4,0,0,2
+covariate,3,2,0,1
+none,2,0,0,0
+observation,0,2,4,0
+prior,2,2,1,1
