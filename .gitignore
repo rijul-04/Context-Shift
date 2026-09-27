@@ -1,0 +1,22 @@
+# patient data never goes in git
+data/raw/
+data/processed/
+*.csv.gz
+*.tar.gz
+set-a/
+set-b/
+set-c/
+Outcomes-*.txt
+
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+.vscode/*
+!.vscode/settings.json
+
+results/*.pkl
+paper/*.aux
+paper/*.log
+paper/*.out
