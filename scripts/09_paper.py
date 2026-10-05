@@ -103,17 +103,64 @@ def main():
 
     tex = rf"""
 \documentclass[10pt,twocolumn]{{article}}
-\usepackage[margin=0.75in]{{geometry}}
-\usepackage{{graphicx,booktabs,amsmath,amssymb,url,xcolor}}
+% IEEE conference layout, reproduced with the standard classes: IEEEtran.cls
+% is not installed in this environment. Geometry, column separation, Times
+% text, Roman section numbering and the author block all follow the IEEE
+% conference template.
+\usepackage[letterpaper,top=0.75in,bottom=1.0in,left=0.625in,right=0.625in]{{geometry}}
+\usepackage{{mathptmx}}
+\usepackage{{graphicx,booktabs,amsmath,amssymb,url,xcolor,cite}}
 \usepackage[hidelinks]{{hyperref}}
-\setlength{{\columnsep}}{{0.28in}}
-\title{{\textbf{{When to Update? Budget-Aware Selection of Model Updates\\
-for Clinical Prediction under Context Shift}}}}
-\author{{ContextShift-Health}}
-\date{{\today}}
+\setlength{{\columnsep}}{{0.25in}}
+\setlength{{\parindent}}{{1em}}
+\renewcommand{{\thetable}}{{\Roman{{table}}}}
+\renewcommand{{\figurename}}{{Fig.}}
+\usepackage{{caption}}
+\captionsetup[table]{{labelsep=newline,justification=centering,
+  font=small,textfont=sc}}
+\captionsetup[figure]{{font=small,labelsep=period}}
+
+% IEEE-style sectioning: Roman numerals, small caps, centred
+\usepackage{{titlesec}}
+\renewcommand{{\thesection}}{{\Roman{{section}}}}
+\renewcommand{{\thesubsection}}{{\Alph{{subsection}}}}
+\titleformat{{\section}}[block]
+  {{\normalfont\normalsize\scshape\centering}}{{\thesection.}}{{0.6em}}{{}}
+\titleformat{{\subsection}}[block]
+  {{\normalfont\normalsize\itshape}}{{\thesubsection.}}{{0.6em}}{{}}
+\titlespacing*{{\section}}{{0pt}}{{10pt}}{{5pt}}
+\titlespacing*{{\subsection}}{{0pt}}{{8pt}}{{4pt}}
+
+% IEEE abstract: run-in bold lead, bold italic keywords
+\renewenvironment{{abstract}}
+  {{\small\noindent\textbf{{\textit{{Abstract}}}}---}}
+  {{\par\vspace{{4pt}}}}
+
+\title{{\vspace{{-2em}}\bfseries\LARGE Budget-Aware Selection of Model Updates\\
+for Clinical Prediction under Context Shift\vspace{{0.4em}}}}
+
+\author{{%
+\begin{{minipage}}{{\textwidth}}\centering
+\begin{{tabular}}{{ccc}}
+\normalsize Srikumaran S & \normalsize Sharan K & \normalsize Kartikeya Shiv Mittal \\[2pt]
+\small\itshape Vellore Institute of Technology &
+\small\itshape Vellore Institute of Technology &
+\small\itshape Vellore Institute of Technology \\
+\small\itshape India & \small\itshape India & \small\itshape India \\[2pt]
+\small\url{{srikumaran.s2023@vitstudent.ac.in}} &
+\small\url{{sharan.k2023a@vitstudent.ac.in}} &
+\small\url{{kartikeya.shiv2023@vitstudent.ac.in}}
+\end{{tabular}}
+\end{{minipage}}%
+}}
+\date{{}}
 
 \begin{{document}}
-\maketitle
+\twocolumn[
+  \begin{{@twocolumnfalse}}
+  \maketitle
+  \end{{@twocolumnfalse}}
+]
 
 \begin{{abstract}}
 When a clinical risk model is deployed at a new site, the reflex is to retrain
@@ -150,6 +197,12 @@ decide whether recalibration helps --- a structural reason why day-one
 diagnostics cannot drive the decision alone.
 \end{{abstract}}
 
+\vspace{{2pt}}
+\noindent\small\textbf{{\textit{{Index Terms}}}}---clinical prediction models,
+dataset shift, model updating, calibration, algorithm selection, electronic
+health records.
+\vspace{{6pt}}
+
 \section{{Introduction}}
 A clinical prediction model does not learn about disease; it learns about a
 place. Trained at one hospital it absorbs that hospital's case mix, its
@@ -167,18 +220,22 @@ this site, these diagnostics, and these few labels, which rung of the ladder
 should we step on?
 
 We make three contributions. We formalise update selection with a label
-budget, scoring policies by regret against the update that was best in
-hindsight and by how often they make a site worse. We meta-learn a selector
-from pseudo-deployments, separating diagnostics into Tier~1 (label-free,
-available on day one) and Tier~2 (needs outcomes). And we report an honest
-negative result with a mechanism: the selector fails, and the tier analysis
-says why.
+budget, scoring policies by regret and by how often they make a site worse.
+We show that the benchmark this field optimises against is largely sampling
+noise, and give a cheap correction --- an oracle that must choose on data it
+is not scored on --- which changes which conclusions survive. And we locate
+the label budget at which updating begins to pay, with a structural account,
+via label-free and label-assisted diagnostics, of why the decision cannot be
+made earlier.
 
 \section{{Problem formulation}}
 A \emph{{deployment episode}} consists of a source model $f$ trained without
 the target site, that site's unlabelled records $U_t$, $n$ labelled cases
-$L_n$ drawn from its adaptation half, and a held-out evaluation half $E_t$
-that only the scorer reads. A policy $\pi$ maps $(f, U_t, L_n)$ to one
+$L_n$ drawn at random from its patients, and the remaining patients $E_t$, on
+which every strategy is scored and which only the scorer reads. Label-free
+strategies and the Tier~1 diagnostics may read $U_t$, including the features
+of patients in $E_t$: that is transductive, and it matches deployment, where
+a hospital holds its own records and lacks only the outcomes. A policy $\pi$ maps $(f, U_t, L_n)$ to one
 strategy from the ladder $S_0 \ldots S_7$ (Table~\ref{{tab:ladder}}). With
 Brier score as the loss,
 \[
