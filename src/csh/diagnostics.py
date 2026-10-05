@@ -45,8 +45,9 @@ def _auc(y, s) -> float:
 def c2st(X_src, X_tgt, cols_idx=None, seed: int = SEED) -> float:
     """Classifier two-sample test: how separable are source and target?
     0.5 means indistinguishable. Cross-fitted, class-balanced."""
-    from sklearn.ensemble import HistGradientBoostingClassifier
     from sklearn.model_selection import StratifiedKFold
+
+    from .models import make_model
 
     if cols_idx is not None:
         X_src, X_tgt = X_src[:, cols_idx], X_tgt[:, cols_idx]
@@ -61,9 +62,8 @@ def c2st(X_src, X_tgt, cols_idx=None, seed: int = SEED) -> float:
     oof = np.zeros(len(d))
     skf = StratifiedKFold(n_splits=min(5, n), shuffle=True, random_state=seed)
     for tr, te in skf.split(X, d):
-        m = HistGradientBoostingClassifier(
-            max_iter=80, max_leaf_nodes=15, learning_rate=0.1,
-            early_stopping=False, random_state=seed)
+        m = make_model("hgb", max_iter=80, max_leaf_nodes=15,
+                       learning_rate=0.1, random_state=seed)
         m.fit(X[tr], d[tr])
         oof[te] = m.predict_proba(X[te])[:, 1]
     return _auc(d, oof)

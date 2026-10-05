@@ -53,7 +53,7 @@ def main():
                 specs.append((ds, kind, target, X, y, dom, cols, gi))
     print(f"{len(specs)} (dataset, model, target) combinations", flush=True)
 
-    out = Parallel(n_jobs=2, verbose=5)(delayed(run_one)(*s) for s in specs)
+    out = Parallel(n_jobs=-1, verbose=5)(delayed(run_one)(*s) for s in specs)
     df = pd.concat([d for d in out if len(d)], ignore_index=True)
     df.to_pickle(PROC / "episodes_real.pkl")
     df.to_csv(RESULTS / "episodes_real.csv", index=False)

@@ -101,3 +101,36 @@ def test_real_cohorts_pass_leakage_guard():
         cols = features.feature_columns(df)
         assert "y" not in cols and "domain" not in cols
         assert len(features.group_map(cols)) >= 3
+
+
+def test_no_feature_is_entirely_unobserved():
+    """A feature that is never observed means a parsing bug, not a quiet zero.
+
+    This is how the sodium variable was caught: the 2012 files call it "Na"
+    and the parser looked for "NA", so six features were silently all-missing.
+    """
+    import numpy as np
+    for ds in ("p2012", "eicu_demo"):
+        df = features.load(ds)
+        X, _, _, cols = features.matrix(df)
+        empty = [c for i, c in enumerate(cols) if not np.isfinite(X[:, i]).any()]
+        assert not empty, f"{ds}: features never observed: {empty}"
+
+
+def test_models_survive_degenerate_columns():
+    """Fitting on a slice where columns are constant must not crash."""
+    import numpy as np
+    from src.csh.models import fit, make_model, predict_proba
+    rng = np.random.default_rng(1)
+    X = rng.normal(size=(60, 5))
+    X[:, 1] = 3.0                      # constant
+    X[:, 2] = np.nan                   # never observed
+    y = rng.binomial(1, 0.4, 60)
+    for kind in ("hgb", "lr"):
+        m = fit(make_model(kind), X, y)
+        p = predict_proba(m, X)
+        assert p.shape == (60,) and np.all((p >= 0) & (p <= 1))
+    # the fully degenerate case: every column constant
+    Xd = np.ones((40, 4))
+    m = fit(make_model("hgb"), Xd, np.r_[np.zeros(20), np.ones(20)].astype(int))
+    assert predict_proba(m, Xd).shape == (40,)

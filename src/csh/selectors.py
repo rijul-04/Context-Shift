@@ -12,6 +12,8 @@ import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.tree import DecisionTreeClassifier, export_text
 
+from .models import guarded
+
 from .config import EPS_TIE, SEED
 from .diagnostics import TIER0, TIER1, TIER2, TIER2_FLAGS
 from .strategies import COST_RANK, LADDER, NEEDS_LABELS
@@ -75,10 +77,10 @@ class MetaSelector:
                 continue
             y = ((df[f"brier_{k}"].to_numpy(dtype=float) - base)
                  / np.maximum(base, 1e-4))
-            m = HistGradientBoostingRegressor(
+            m = guarded(HistGradientBoostingRegressor(
                 max_depth=3, max_iter=200, learning_rate=0.06,
                 min_samples_leaf=20, early_stopping=False,
-                random_state=self.seed)
+                random_state=self.seed))
             m.fit(X, y)
             models[k] = m
         return models

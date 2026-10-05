@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import numpy as np
+import warnings
+
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -15,6 +18,43 @@ from .metrics import brier
 MODEL_KINDS = ("hgb", "lr")
 
 
+class DropDegenerate(BaseEstimator, TransformerMixin):
+    """Drop columns with fewer than two distinct observed values.
+
+    Such columns carry no information for any model, and scikit-learn >= 1.9
+    raises inside histogram binning when it meets one ("window shape cannot be
+    larger than input array shape"). They arise legitimately here: a lab that
+    nobody in a subset had measured, or any column at all once a strategy fits
+    on ten labelled cases. A column qualifies when its smallest observed value
+    is below its largest, which is exact and costs two passes.
+    """
+
+    def fit(self, X, y=None, **kwargs):
+        X = np.asarray(X, dtype=float)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")      # all-NaN columns warn here
+            lo = np.nanmin(X, axis=0) if len(X) else np.zeros(X.shape[1])
+            hi = np.nanmax(X, axis=0) if len(X) else np.zeros(X.shape[1])
+        self.keep_ = np.asarray(lo < hi)
+        # A fit on a degenerate slice keeps nothing; give the estimator one
+        # alternating column so it still fits (and predicts the base rate)
+        # instead of crashing.
+        self.synthetic_ = not self.keep_.any()
+        self.n_features_in_ = X.shape[1]
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X, dtype=float)
+        if self.synthetic_:
+            return (np.arange(len(X)) % 2).reshape(-1, 1).astype(float)
+        return X[:, self.keep_]
+
+
+def guarded(estimator) -> Pipeline:
+    """Any tree estimator, protected from degenerate columns."""
+    return Pipeline([("drop", DropDegenerate()), ("clf", estimator)])
+
+
 def make_model(kind: str = "hgb", **over):
     if kind == "hgb":
         params = dict(
@@ -23,7 +63,7 @@ def make_model(kind: str = "hgb", **over):
             early_stopping=False, random_state=SEED,
         )
         params.update(over)
-        return HistGradientBoostingClassifier(**params)
+        return guarded(HistGradientBoostingClassifier(**params))
     if kind == "lr":
         params = dict(C=1.0, max_iter=2000, random_state=SEED)
         params.update(over)
@@ -79,8 +119,9 @@ def tune(kind: str, X, y, groups, grid=None) -> dict:
 def top_features(model, X, cols, k: int = 10) -> list[int]:
     """Indices of the k features the source model relies on most.
     Uses |coef| for LR and a fast permutation-free proxy for HGB."""
-    if isinstance(model, Pipeline):
-        coef = np.abs(model.named_steps["clf"].coef_.ravel())
+    final = model.named_steps["clf"] if isinstance(model, Pipeline) else model
+    if hasattr(final, "coef_"):
+        coef = np.abs(final.coef_.ravel())
         return list(np.argsort(coef)[::-1][:k])
     # HGB: variance of predictions when a feature is shuffled once (cheap)
     rng = np.random.default_rng(SEED)

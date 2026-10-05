@@ -17,7 +17,7 @@ STATIC = ["Age", "Gender", "Height", "Weight"]  # ICUType handled separately
 TIMESERIES = [
     "ALP", "ALT", "AST", "Albumin", "BUN", "Bilirubin", "Cholesterol",
     "Creatinine", "DiasABP", "FiO2", "GCS", "Glucose", "HCO3", "HCT", "HR",
-    "K", "Lactate", "MAP", "Mg", "NA", "NIDiasABP", "NIMAP", "NISysABP",
+    "K", "Lactate", "MAP", "Mg", "Na", "NIDiasABP", "NIMAP", "NISysABP",
     "PaCO2", "PaO2", "Platelets", "RespRate", "SaO2", "SysABP", "Temp",
     "TroponinI", "TroponinT", "Urine", "WBC", "pH",
 ]

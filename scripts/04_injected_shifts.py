@@ -119,7 +119,7 @@ def main():
                     specs.append((ds, KIND, st, sev, fold, X, y, dom, cols, gi))
     print(f"{len(specs)} injected pseudo-targets", flush=True)
 
-    out = Parallel(n_jobs=2, verbose=5)(delayed(one_injected)(*s) for s in specs)
+    out = Parallel(n_jobs=-1, verbose=5)(delayed(one_injected)(*s) for s in specs)
     df = pd.concat([d for d in out if len(d)], ignore_index=True)
     df.to_pickle(PROC / "episodes_injected.pkl")
     df.to_csv(RESULTS / "episodes_injected.csv", index=False)
