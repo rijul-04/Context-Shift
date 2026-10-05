@@ -212,5 +212,12 @@ def selection_results(df: pd.DataFrame, picks: list[str]) -> pd.DataFrame:
     # already optimal, which happens in 29% of episodes.)
     out["rel_regret"] = out["regret"] / np.maximum(out["brier_S0"], 1e-4)
     out["net_gain"] = out["brier_S0"] - out["brier"]
+    # regret against an oracle that had to choose blind: the plain oracle
+    # banks sampling luck, so regret against it is partly unattainable
+    if "brier_oracle_honest" in df.columns:
+        oh = df["brier_oracle_honest"].to_numpy()
+        out["regret_honest"] = out["brier"].to_numpy() - oh
+        out["rel_regret_honest"] = (out["regret_honest"]
+                                    / np.maximum(out["brier_S0"], 1e-4))
     out["correct"] = [p == o for p, o in zip(picks, df["oracle"])]
     return out

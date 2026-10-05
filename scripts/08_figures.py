@@ -91,6 +91,50 @@ def fig2_phase_diagram(ep: pd.DataFrame):
     save(fig, FIGS / "fig2_phase_diagram.png")
 
 
+def fig_honest_gain(ep: pd.DataFrame):
+    """How much of the apparent opportunity survives having to choose blind."""
+    ep = ep.copy()
+    ep["apparent"] = (ep["brier_S0"] - ep["brier_oracle"]) * 1000
+    ep["honest"] = (ep["brier_S0"] - ep["brier_oracle_honest"]) * 1000
+
+    fig, axes = plt.subplots(1, 2, figsize=(9.8, 3.9))
+
+    ax = axes[0]
+    per = (ep.groupby(["dataset", "target"])[["apparent", "honest", "n_eval"]]
+           .mean().sort_values("n_eval"))
+    y = np.arange(len(per))
+    ax.barh(y + 0.19, per["apparent"], height=0.36, color=SERIES["orange"])
+    ax.barh(y - 0.19, per["honest"], height=0.36, color=SERIES["blue"])
+    ax.axvline(0, color=INK_2, lw=1)
+    ax.set_yticks(y, [f"{t}\n{int(n)} patients" for (_, t), n
+                      in zip(per.index, per["n_eval"])], fontsize=7.5)
+    ax.set_xlabel("gain over no update (Brier $\\times 10^{-3}$)")
+    ax.set_title("Per site, smallest first")
+    ax.invert_yaxis()                      # smallest site at the top
+    handles = [plt.Line2D([], [], color=SERIES["orange"], lw=7,
+                          label="apparent gain"),
+               plt.Line2D([], [], color=SERIES["blue"], lw=7,
+                          label="gain that survives")]
+    ax.legend(handles=handles, loc="lower right", fontsize=8.5)
+
+    ax = axes[1]
+    by_n = ep.groupby("n")[["apparent", "honest"]].mean()
+    x = np.arange(len(by_n))
+    ax.axhline(0, color=INK_2, lw=1)
+    ax.plot(x, by_n["apparent"], color=SERIES["orange"], marker="o")
+    ax.plot(x, by_n["honest"], color=SERIES["blue"], marker="o")
+    label_end(ax, x[-1], by_n["apparent"].iloc[-1], "apparent", SERIES["orange"])
+    label_end(ax, x[-1], by_n["honest"].iloc[-1], "real", SERIES["blue"])
+    ax.set_xticks(x, [str(i) for i in by_n.index])
+    ax.set_xlim(-0.2, len(by_n) + 1.4)
+    ax.set_xlabel("labelled cases at the new site")
+    ax.set_ylabel("gain over no update ($\\times 10^{-3}$)")
+    ax.set_title("Real opportunity appears only above ~400 labels")
+    fig.suptitle("Most of the apparent gain from updating is sampling noise",
+                 fontsize=11.5, fontweight="bold", color=INK, y=1.04)
+    save(fig, FIGS / "fig0_honest_gain.png")
+
+
 def fig3_regret_curves():
     """H3 and the Tier 1 / Tier 2 crossover."""
     curve = pd.read_csv(RESULTS / "regret_by_budget.csv", index_col=0)
@@ -199,6 +243,7 @@ def main():
     apply_style()
     ep = pd.read_pickle(PROC / "episodes_real.pkl")
     print("figures:")
+    fig_honest_gain(ep)
     fig1_degradation()
     fig2_phase_diagram(ep)
     fig3_regret_curves()

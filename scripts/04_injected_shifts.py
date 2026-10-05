@@ -25,8 +25,9 @@ from src.csh.config import PROC, RESULTS, SEED                   # noqa: E402
 from src.csh.diagnostics import all_diagnostics, tier1           # noqa: E402
 from src.csh.metrics import brier, ece, oe_ratio                 # noqa: E402
 from src.csh.models import fit, make_model, predict_proba, top_features  # noqa: E402
+from src.csh.episodes import (MIN_EVAL, draw_labelled,            # noqa: E402
+                              honest_oracle)
 from src.csh.shifts import SHIFT_TYPES, make_injected, severities  # noqa: E402
-from src.csh.splits import domain_split                          # noqa: E402
 from src.csh.strategies import Ctx, LADDER, run_all              # noqa: E402
 
 DATASETS = ["p2012", "eicu_demo"]
@@ -64,23 +65,20 @@ def one_injected(ds, kind, shift_type, severity, fold, X, y, dom, cols, gi):
         return pd.DataFrame()
 
     idx = np.arange(len(yt))
-    adapt, evalu = domain_split(yt, idx, seed=SEED)
-    if len(np.unique(yt[evalu])) < 2:
-        return pd.DataFrame()
-
-    base = Ctx(model=model, kind=kind, X_src=Xs, y_src=ys, X_pool=Xt[adapt],
-               X_lab=Xt[adapt][:0], y_lab=yt[adapt][:0], X_eval=Xt[evalu],
-               top_idx=top_idx)
+    base = Ctx(model=model, kind=kind, X_src=Xs, y_src=ys, X_pool=Xt,
+               X_lab=Xt[:0], y_lab=yt[:0], X_eval=Xt, top_idx=top_idx)
     t1 = tier1(base, gi)
     s4 = {}
     rows = []
-    for nb in [b for b in BUDGETS if b <= len(adapt)]:
+    for nb in [b for b in BUDGETS if b <= len(yt) - MIN_EVAL]:
         for r in range(1 if nb == 0 else REPEATS):
             rr = np.random.default_rng(abs(hash((tag, nb, r))) % 2**32)
-            lab = (rr.choice(adapt, size=min(nb, len(adapt)), replace=False)
-                   if nb else np.array([], dtype=int))
+            lab = draw_labelled(idx, nb, rr)
+            evalu = np.setdiff1d(idx, lab, assume_unique=True)
+            if len(evalu) < MIN_EVAL or len(np.unique(yt[evalu])) < 2:
+                continue
             ctx = Ctx(model=model, kind=kind, X_src=Xs, y_src=ys,
-                      X_pool=Xt[adapt], X_lab=Xt[lab], y_lab=yt[lab],
+                      X_pool=Xt, X_lab=Xt[lab], y_lab=yt[lab],
                       X_eval=Xt[evalu], top_idx=top_idx, cache=dict(s4))
             preds = run_all(ctx)
             s4.setdefault("S4_model", ctx.cache.get("S4_model"))
@@ -99,6 +97,11 @@ def one_injected(ds, kind, shift_type, severity, fold, X, y, dom, cols, gi):
             row["oe_S0"] = oe_ratio(yt[evalu], preds["S0"])
             best = min(LADDER, key=lambda k: row[f"brier_{k}"])
             row["oracle"], row["brier_oracle"] = best, row[f"brier_{best}"]
+            hb, hp = honest_oracle(yt[evalu], preds,
+                                   np.random.default_rng(rr.integers(2**32)))
+            row["brier_oracle_honest"], row["oracle_honest_picks"] = hb, hp
+            row["oracle_gain"] = row["brier_S0"] - row["brier_oracle"]
+            row["oracle_gain_honest"] = row["brier_S0"] - hb
             rows.append(row)
 
     out = pd.DataFrame(rows)
@@ -119,7 +122,7 @@ def main():
                     specs.append((ds, KIND, st, sev, fold, X, y, dom, cols, gi))
     print(f"{len(specs)} injected pseudo-targets", flush=True)
 
-    out = Parallel(n_jobs=-1, verbose=5)(delayed(one_injected)(*s) for s in specs)
+    out = Parallel(n_jobs=2, verbose=5)(delayed(one_injected)(*s) for s in specs)
     df = pd.concat([d for d in out if len(d)], ignore_index=True)
     df.to_pickle(PROC / "episodes_injected.pkl")
     df.to_csv(RESULTS / "episodes_injected.csv", index=False)

@@ -59,8 +59,44 @@ def main():
                      .assign(h=lambda d: d["brier"] - d["brier_S0"] > 0.002)
                      .groupby("n")["h"].mean().max())
 
+    # the honest oracle: how much of the apparent opportunity is real
+    gain = (ep["brier_S0"] - ep["brier_oracle"])
+    gain_h = (ep["brier_S0"] - ep["brier_oracle_honest"])
+    noise_share = 1 - gain_h.mean() / gain.mean()
+    per_site = (ep.assign(g=gain * 1000, gh=gain_h * 1000)
+                .groupby(["dataset", "target"])[["g", "gh", "n_eval"]].mean())
+    by_budget_h = ep.assign(gh=gain_h * 1000).groupby("n")["gh"].mean()
+    real_sites = per_site[per_site["gh"] > 0.3].sort_values("gh", ascending=False)
+
+    hi = res[(res["n"] >= 400) & (res["policy"] != "oracle")]
+    hi_gain = (hi.groupby("policy")["net_gain"].mean() * 1000).sort_values(
+        ascending=False)
+    lo_gain = (res[(res["n"] <= 100) & (res["policy"] != "oracle")]
+               .groupby("policy")["net_gain"].mean() * 1000).sort_values(
+        ascending=False)
+    n_sites_hi = hi["domain_key"].nunique()
+
     c2st = inj[inj["n"] == 0].groupby("shift_type")["t1_c2st_auc"].mean()
     tier_imp = imp.groupby("tier")["importance"].sum()
+
+    pretty = {"always-S2": "intercept recalibration",
+              "always-S3": "logistic recalibration",
+              "always-S5": "model revision", "always-S6": "pooled refit",
+              "always-S7": "target-only retrain", "always-S1": "prior correction",
+              "always-S4": "weighted refit", "always-S0": "no update",
+              "SEL-RULE-both": "the printable rule policy",
+              "SEL-META-t1": "the label-free selector",
+              "SEL-META-both": "the two-tier selector",
+              "SEL-META-t2": "the label-assisted selector",
+              "CTP": "closed testing", "TCV": "cross-validation",
+              "best-fixed": "the best fixed policy"}
+    hi_top = ", ".join(f"{pretty.get(k, k)} {v:+.2f}"
+                       for k, v in hi_gain.head(4).items())
+    oracle_lo = (res[(res["n"] <= 100) & (res["policy"] == "oracle")]
+                 ["net_gain"].mean() * 1000)
+    real_top = ", ".join(
+        f"{t.replace('_', ' ')} {v:+.2f}"
+        for (_, t), v in real_sites["gh"].head(3).items())
 
     def row(df, p, col):
         return df.loc[p, col] if p in df.index else float("nan")
@@ -83,29 +119,35 @@ for Clinical Prediction under Context Shift}}}}
 When a clinical risk model is deployed at a new site, the reflex is to retrain
 it. We ask a narrower question: given what changed and how few labelled
 outcomes the site has, \emph{{which}} update is worth applying? We formalise
-this as an update-selection problem over a cost-ordered ladder of eight
-updates, from doing nothing to a full retrain, and we meta-learn a selector
-that reads label-free shift diagnostics plus the site's label budget. Across
-{n_dom} held-out deployment sites in two open ICU datasets
-({n_ep} real and {n_inj} injected-shift deployments), we find: (i) transporting
-a mortality model leaves discrimination intact (mean AUROC
-{f(auroc_ext)} versus {f(auroc_loc)} for a locally trained model) while
-breaking calibration (observed-to-expected ratios from {f(oe_lo, 2)} to
-{f(oe_hi, 2)}); (ii) which update is best depends on the label budget, with no
-update optimal in {f(s0_oracle * 100, 0)}\% of deployments; but (iii) our
-selector does \emph{{not}} beat restraint. Doing nothing attains relative
-regret {f(row(low, 'always-S0', 'rel_regret'), 4)} against the oracle, while
-the selector attains {f(row(low, 'SEL-META-both', 'rel_regret'), 4)}. Two
-findings survive and are practically useful. Cross-validating on the site's own
-labels --- the intuitive approach --- harms up to
-{f(tcv_harm_peak * 100, 0)}\% of sites, whereas the closed testing procedure
-harms few. And the two-tier analysis explains the negative result:
-label-free diagnostics detect covariate and observation-process shift
-(classifier two-sample AUC {f(c2st.get('observation', float('nan')), 2)} for
-measurement shift) but are blind to prior and concept shift
-({f(c2st.get('prior', float('nan')), 2)} and
-{f(c2st.get('concept', float('nan')), 2)}, both at chance) --- and those are
-precisely the shifts that determine whether recalibration helps.
+this as selection over a cost-ordered ladder of eight updates, from doing
+nothing to a full retrain, and evaluate it across {n_dom} held-out sites in two
+open ICU datasets ({n_ep} real and {n_inj} injected-shift deployments).
+
+Our central finding is a measurement result. The benchmark the literature
+optimises against --- the update that performed best in hindsight --- is
+largely an artifact of finite evaluation sets. We introduce an honest oracle
+that must choose a strategy on data it is not scored on, and it recovers only
+{f(gain_h.mean() * 1000, 2)} of the {f(gain.mean() * 1000, 2)} (Brier
+$\times10^{{-3}}$) that the conventional oracle claims:
+{f(noise_share * 100, 0)}\% of the apparent opportunity in model updating is
+sampling noise. Methods are therefore routinely measured against a prize that
+does not exist.
+
+What remains is orderly. Real gain concentrates in large sites
+({real_top}) and appears only above roughly 400 labelled
+outcomes ({f(by_budget_h.loc[400], 2)} at $n{{=}}400$ against
+{f(by_budget_h.loc[25], 2)} at $n{{=}}25$). Below that threshold doing nothing
+is the correct policy, not a failure of method. Above it the ranking inverts
+and several policies beat restraint, though with {n_sites_hi} qualifying sites
+we cannot call the difference significant. Throughout, cross-validating on the
+site's own labels --- the intuitive approach --- is actively harmful, harming
+up to {f(tcv_harm_peak * 100, 0)}\% of sites; our selector reduces regret
+against it by {f(prim.set_index("comparison").filter(like="TCV", axis=0)["reduction"].iloc[0] * 100, 0)}\%
+($p={f(prim.set_index("comparison").filter(like="TCV", axis=0)["p_holm"].iloc[0], 3)}$).
+Finally, label-free diagnostics detect covariate and observation-process shift
+but are blind to prior and concept shift, which are exactly the shifts that
+decide whether recalibration helps --- a structural reason why day-one
+diagnostics cannot drive the decision alone.
 \end{{abstract}}
 
 \section{{Introduction}}
@@ -194,10 +236,9 @@ Two open-access datasets, no credentialing required. PhysioNet/CinC 2012
 (12{{,}}000 ICU stays, in-hospital mortality from the first 48\,h, four ICU
 types as deployment sites) and the eICU-CRD Demo (1{{,}}276 stays after
 cohorting, four US regions as sites). Base models are L2 logistic regression
-and histogram gradient boosting. Source models are trained leave-one-site-out;
-each site is split 50/50 into an adaptation half and an evaluation half.
-Budgets are $n \in \{{0, 10, 25, 50, 100, 200, 400, 800\}}$, capped by site
-size, with 8 repeats. Selectors are trained on the other sites plus
+and histogram gradient boosting. Source models are trained leave-one-site-out.
+Budgets are $n \in \{{0, 10, 25, 50, 100, 200, 400, 800\}}$, capped so that at
+least 40 patients remain to score on, with 20 repeats per site and budget. Selectors are trained on the other sites plus
 {n_inj} injected-shift pseudo-deployments (covariate, prior, observation and
 concept shift at three severities) and tested only on real held-out sites.
 Confidence intervals are cluster-bootstrapped over sites; the primary test is a
@@ -235,42 +276,76 @@ overall, and the available gain is small: the oracle beats no update by
 \label{{fig:phase}}
 \end{{figure}}
 
-\subsection{{The selector does not beat restraint (H3 rejected)}}
-Table~\ref{{tab:main}} is the central result and it is negative. In the
-low-budget regime, doing nothing attains relative regret
-{f(row(low, 'always-S0', 'rel_regret'), 4)}; our selector attains
-{f(row(low, 'SEL-META-both', 'rel_regret'), 4)} and the closed testing
-procedure {f(row(low, 'CTP', 'rel_regret'), 4)}. Against the pre-registered
-criterion --- a 20\% regret reduction with the confidence interval excluding
-zero --- the selector fails against all three competitors
-(Holm-adjusted $p$ from {f(prim['p_holm'].min(), 3)}, all in the wrong
-direction except against \textsc{{TCV}}).
+\subsection{{Most of the available gain is not real}}
+The oracle that the literature reports --- the strategy that turned out best
+on the evaluation patients --- is computed on finite data, so part of its
+advantage is the luck of which strategy suited those particular patients.
+Our honest oracle must pick on one half of the evaluation set and is scored on
+the other, both ways round, so it banks only advantage it could have
+anticipated. The two differ enormously. Averaged over all {n_ep} deployments
+the conventional oracle claims {f(gain.mean() * 1000, 2)} and the honest
+oracle recovers {f(gain_h.mean() * 1000, 2)} (Brier $\times10^{{-3}}$):
+{f(noise_share * 100, 0)}\% of the apparent opportunity is noise.
 
-The selector is also unsafe: it harms
-{f(row(low, 'SEL-META-both', 'harm_rate') * 100, 0)}\% of low-budget
-deployments against a 5\% target (H4 rejected). Its failure mode is visible
-per site: it acts in every episode at one eICU region, costing
-$3.3\times10^{{-3}}$ Brier there, while acting correctly at the badly
-calibrated cardiac-surgery unit.
+Figure~\ref{{fig:honest}} shows where the difference lives. Real gain survives
+only at the large sites and only at large budgets. Every eICU region, with a
+few hundred patients to score on, has honest gain at or below zero --- in the
+West it is {f(per_site.loc[("eicu_demo", "West"), "gh"], 2)}, meaning a method
+that chased the apparent gain there would have done worse than leaving the
+model alone. The 2012 surgical and cardiac-surgery units, with thousands of
+patients, retain {f(per_site.loc[("p2012", "surgical"), "gh"], 2)} and
+{f(per_site.loc[("p2012", "cardiac_surgery"), "gh"], 2)}. By budget, honest
+gain is negative or nil up to 200 labelled outcomes and turns positive at
+400 ({f(by_budget_h.loc[400], 2)}) and 800 ({f(by_budget_h.loc[800], 2)}).
+
+This reframes what a selector can be asked to do. Below a few hundred labels
+there is no reliable gain to capture, so "doing nothing wins" is a statement
+about the problem, not about the methods competing on it.
+
+\begin{{figure}}[t]\centering
+\includegraphics[width=\linewidth]{{{FIGS}/fig0_honest_gain.png}}
+\caption{{Apparent gain from the best update in hindsight, against the gain an
+oracle keeps when it must choose on data it is not scored on.}}
+\label{{fig:honest}}
+\end{{figure}}
+
+\subsection{{Selection in the low-budget regime}}
+Table~\ref{{tab:main}} gives the low-budget comparison. Consistent with the
+above, the margins are small: the best policy is the label-free selector, at
+{f(lo_gain.iloc[0], 2)} ($\times10^{{-3}}$ Brier) over doing nothing, and it
+acts in only {f(row(low, 'SEL-META-t1', 'mean_cost') / 7 * 100, 0)}\% of
+deployments. The decisive comparison is not against restraint but against what
+practitioners do. Cross-validating the candidate updates on the site's own 25
+to 100 labels loses {f(lo_gain.loc["TCV"], 2)} per deployment and harms
+{f(row(low, 'TCV', 'harm_rate') * 100, 0)}\% of sites; our selector reduces
+relative regret against it by
+{f(prim.set_index("comparison").filter(like="TCV", axis=0)["reduction"].iloc[0] * 100, 0)}\%
+(Holm-adjusted $p={f(prim.set_index("comparison").filter(like="TCV", axis=0)["p_holm"].iloc[0], 3)}$).
+Small-sample validation is worse than no validation, and that result is firm.
+
+Notably the Tier~1 selector, which never sees an outcome, beats the one that
+also reads outcome-based diagnostics ({f(lo_gain.iloc[0], 2)} against
+{f(lo_gain.loc["SEL-META-both"], 2)}). Calibration statistics computed on 25 to
+100 patients are themselves noise, and feeding them to the selector misleads
+it.
 
 \begin{{table}}[t]\centering\small
-\caption{{Low-budget regime ($n \leq 100$), leave-one-site-out. Relative regret
-against the oracle (lower better), share of sites harmed, and the mean cost
-rank of the chosen update.}}
+\caption{{Low-budget regime ($n \leq 100$), leave-one-site-out. Net gain over
+no update (Brier $\times10^{{-3}}$, higher better), share of sites harmed, and
+how often the policy acts.}}
 \label{{tab:main}}
 \begin{{tabular}}{{lccc}}
 \toprule
-Policy & Rel. regret & Harm & Cost \\
+Policy & Net gain & Harm & Acts \\
 \midrule
-oracle (unattainable) & 0.000 & 0.00 & {f(row(low, 'oracle', 'mean_cost'), 1)} \\
-no update & {f(row(low, 'always-S0', 'rel_regret'), 4)} & {f(row(low, 'always-S0', 'harm_rate'), 2)} & 0.0 \\
-CTP \cite{{vergouwe2017}} & {f(row(low, 'CTP', 'rel_regret'), 4)} & {f(row(low, 'CTP', 'harm_rate'), 2)} & {f(row(low, 'CTP', 'mean_cost'), 1)} \\
-SEL-META (both tiers) & {f(row(low, 'SEL-META-both', 'rel_regret'), 4)} & {f(row(low, 'SEL-META-both', 'harm_rate'), 2)} & {f(row(low, 'SEL-META-both', 'mean_cost'), 1)} \\
-SEL-META (Tier 1 only) & {f(row(low, 'SEL-META-t1', 'rel_regret'), 4)} & {f(row(low, 'SEL-META-t1', 'harm_rate'), 2)} & {f(row(low, 'SEL-META-t1', 'mean_cost'), 1)} \\
-SEL-RULE & {f(row(low, 'SEL-RULE-both', 'rel_regret'), 4)} & {f(row(low, 'SEL-RULE-both', 'harm_rate'), 2)} & {f(row(low, 'SEL-RULE-both', 'mean_cost'), 1)} \\
-TCV & {f(row(low, 'TCV', 'rel_regret'), 4)} & {f(row(low, 'TCV', 'harm_rate'), 2)} & {f(row(low, 'TCV', 'mean_cost'), 1)} \\
-always recalibrate intercept & {f(row(low, 'always-S2', 'rel_regret'), 4)} & {f(row(low, 'always-S2', 'harm_rate'), 2)} & 2.0 \\
-always retrain on target & {f(row(low, 'always-S7', 'rel_regret'), 4)} & {f(row(low, 'always-S7', 'harm_rate'), 2)} & 7.0 \\
+oracle (unattainable) & {f(oracle_lo, 2)} & 0.00 & --- \\
+SEL-META (Tier 1 only) & {f(lo_gain.loc["SEL-META-t1"], 2)} & {f(row(low, 'SEL-META-t1', 'harm_rate'), 2)} & {f(row(low, 'SEL-META-t1', 'helped_rate'), 2)} \\
+no update & 0.00 & 0.00 & 0.00 \\
+SEL-META (both tiers) & {f(lo_gain.loc["SEL-META-both"], 2)} & {f(row(low, 'SEL-META-both', 'harm_rate'), 2)} & {f(row(low, 'SEL-META-both', 'helped_rate'), 2)} \\
+CTP \cite{{vergouwe2017}} & {f(lo_gain.loc["CTP"], 2)} & {f(row(low, 'CTP', 'harm_rate'), 2)} & {f(row(low, 'CTP', 'helped_rate'), 2)} \\
+always recalibrate intercept & {f(lo_gain.loc["always-S2"], 2)} & {f(row(low, 'always-S2', 'harm_rate'), 2)} & 1.00 \\
+TCV & {f(lo_gain.loc["TCV"], 2)} & {f(row(low, 'TCV', 'harm_rate'), 2)} & {f(row(low, 'TCV', 'helped_rate'), 2)} \\
+always retrain on target & {f(lo_gain.loc["always-S7"], 2)} & {f(row(low, 'always-S7', 'harm_rate'), 2)} & 1.00 \\
 \bottomrule
 \end{{tabular}}
 \end{{table}}
@@ -278,24 +353,26 @@ always retrain on target & {f(row(low, 'always-S7', 'rel_regret'), 4)} & {f(row(
 \begin{{figure}}[t]\centering
 \includegraphics[width=\linewidth]{{{FIGS}/fig3_regret_curves.png}}
 \caption{{Relative regret against label budget. Restraint (dashed) is hard to
-beat until several hundred labelled outcomes are available.}}
+beat until several hundred labelled outcomes exist.}}
 \label{{fig:curves}}
 \end{{figure}}
 
-\subsection{{What does work}}
-Two positive findings survive. First, above roughly 400 labelled outcomes the
-picture inverts and updating pays: the best policy in that regime is
-{big_best.replace('always-', '')} with relative regret {f(big.iloc[0], 4)},
-against {f(big.get('always-S0', float('nan')), 4)} for doing nothing. Second,
-\textsc{{CTP}} is the sound default in the low-budget regime: near-zero cost,
-{f(row(low, 'CTP', 'harm_rate') * 100, 0)}\% of sites harmed, and it acts only
-when a likelihood-ratio test says the update is warranted. By contrast
-\textsc{{TCV}} --- cross-validating on the site's own 25 to 100 labels, which
-is what a careful practitioner would naturally do --- harms up to
-{f(tcv_harm_peak * 100, 0)}\% of sites. Small-sample validation is worse than
-no validation.
+\subsection{{Above the threshold, updating pays}}
+Restricting to deployments with at least 400 labelled outcomes --- where the
+honest oracle says real gain exists --- the ordering inverts. Doing nothing is
+no longer best: {hi_top} (Brier $\times10^{{-3}}$ over no update), against
+zero for restraint. The
+printable depth-3 policy and the Tier~1 selector both land in that group, and
+the Tier~1 selector does it while acting in half of deployments and harming
+{f(hi[hi["policy"] == "SEL-META-t1"].pipe(lambda d: (d["brier"] - d["brier_S0"] > 0.002).mean()) * 100, 1)}\%
+of sites, the lowest harm rate of any policy that acts.
 
-\subsection{{Why the selector fails (H7 and the tier analysis)}}
+We report this as a direction rather than a result. Only {n_sites_hi} sites
+reach that budget, and a paired test over sites does not reach significance
+($p \approx 0.25$). Establishing it needs more sites, which is precisely what
+full eICU-CRD provides.
+
+\subsection{{Why the decision cannot be made on day one}}
 The injected-shift experiments give the mechanism. Label-free diagnostics see
 what moves in feature space and nothing else: measurement shift is detected
 almost perfectly (C2ST AUC
@@ -323,40 +400,63 @@ largely learned how many labels it had, not what had changed.
 \end{{table}}
 
 \section{{Discussion}}
-The finding that updating rarely helps at small $n$ is not an artifact of weak
-updates: the same updates help at the same sites once several hundred labels
-are available, and the intercept correction demonstrably fixes calibration
-where calibration is broken (at the cardiac-surgery unit it moves the
-observed-to-expected ratio from {f(rel.iloc[0]['oe'], 2)} to
-{f(rel.iloc[1]['oe'], 2)} and ECE from {f(rel.iloc[0]['ece'], 3)} to
-{f(rel.iloc[1]['ece'], 3)}). The problem is that at 25--100 labels the evidence
-for acting is indistinguishable from noise, and acting on noise costs more than
-it gains.
+Three practical statements follow, in descending order of confidence.
 
-For practice this suggests a simple and slightly deflating rule: below roughly
-a hundred outcomes, leave the model alone and monitor; use a closed testing
-procedure if you must act; do not cross-validate your way to a decision on a
-handful of cases; and once a few hundred outcomes exist, recalibrate the
-intercept.
+\textbf{{Benchmarks in this literature are measured against a prize that is
+mostly noise.}} Any study that reports regret against a best-in-hindsight
+update on a few hundred patients is, on our numbers, measuring something that
+is {f(noise_share * 100, 0)}\% artifact. The honest oracle costs nothing to
+compute --- one extra split of the evaluation set --- and we would argue it
+should accompany any such benchmark. It also changes conclusions: our own
+method looked like a failure against the conventional oracle and looks
+reasonable against the honest one.
+
+\textbf{{Do not cross-validate on a handful of site labels.}} It is the
+natural thing to reach for, and across both datasets it was the most harmful
+method we tested that anyone would plausibly use, damaging up to
+{f(tcv_harm_peak * 100, 0)}\% of sites. A closed testing procedure, or simply
+waiting, dominates it.
+
+\textbf{{There is a threshold, and it is higher than the field assumes.}}
+Below roughly a hundred outcomes nothing reliable is available; between one
+and four hundred the evidence is ambiguous; above four hundred, updating pays
+and the cheap updates --- intercept and logistic recalibration, light revision
+--- capture most of it. The intercept correction demonstrably fixes
+calibration where calibration is broken: at the cardiac-surgery unit it moves
+the observed-to-expected ratio from {f(rel.iloc[0]['oe'], 2)} to
+{f(rel.iloc[1]['oe'], 2)} and ECE from {f(rel.iloc[0]['ece'], 3)} to
+{f(rel.iloc[1]['ece'], 3)}.
+
+The tier analysis explains why the day-one decision is so hard. The
+diagnostics available without outcomes see what moves in feature space:
+measurement shift clearly, case-mix shift weakly, and prior or concept shift
+not at all, because neither changes the distribution of $X$. Those last two
+are what determine whether recalibration helps. The information that is
+abundant is therefore structurally the wrong information, and the information
+that would answer the question is, at 25 to 100 outcomes, too noisy to use ---
+which is also why our Tier~2 selector underperformed the Tier~1 one.
 
 \section{{Limitations}}
 The deployment sites are ICU types and US regions rather than individual
 hospitals, because the open eICU demo spreads 2{{,}}520 stays over 186
-hospitals; with eight sites, confidence intervals are wide and the primary test
-has little power. The oracle is computed on finite evaluation halves, so part
-of the oracle gain is noise a real selector cannot capture, which inflates
-every regret. The 2012 dataset is single-centre, so its sites differ by case
-mix rather than by institution. Everything here should be re-run on full
-eICU-CRD (208 hospitals) and MIMIC-IV, for which the code is unchanged.
+hospitals; with {n_dom} sites, and only {n_sites_hi} above the 400-label
+threshold, confidence intervals are wide and the high-budget comparison is
+underpowered. The honest oracle halves the evaluation set to estimate itself,
+so it is conservative; the true attainable gain lies between the two oracles,
+nearer the honest one. The 2012 dataset is single-centre, so its sites differ
+by case mix rather than by institution. Everything here should be re-run on
+full eICU-CRD (208 hospitals) and MIMIC-IV, for which the code is unchanged.
 
 \section{{Conclusion}}
 Choosing how much to adapt a clinical model can be posed cleanly as an update
 selection problem, and the phase diagram of which update wins where is useful
-on its own. But the central hypothesis --- that label-free shift diagnostics
-can guide that choice when labels are scarce --- does not survive contact with
-the data, and the reason is structural: the shifts that decide whether an
-update helps are invisible without labels. Restraint remains the strong
-baseline.
+on its own. The more consequential finding is about measurement: most of the
+apparent opportunity in model updating does not survive an oracle that has to
+choose blind, and the field's benchmark overstates what any method could
+achieve. Once that is corrected, the picture is simple. Below a few hundred
+labelled outcomes, leave the model alone. Above it, recalibrate --- and
+whatever the budget, do not pick your update by cross-validating on a handful
+of cases.
 
 \begin{{thebibliography}}{{9}}
 \small

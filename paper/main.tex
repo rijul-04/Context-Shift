@@ -16,29 +16,35 @@ for Clinical Prediction under Context Shift}}
 When a clinical risk model is deployed at a new site, the reflex is to retrain
 it. We ask a narrower question: given what changed and how few labelled
 outcomes the site has, \emph{which} update is worth applying? We formalise
-this as an update-selection problem over a cost-ordered ladder of eight
-updates, from doing nothing to a full retrain, and we meta-learn a selector
-that reads label-free shift diagnostics plus the site's label budget. Across
-8 held-out deployment sites in two open ICU datasets
-(720 real and 152 injected-shift deployments), we find: (i) transporting
-a mortality model leaves discrimination intact (mean AUROC
-0.801 versus 0.773 for a locally trained model) while
-breaking calibration (observed-to-expected ratios from 0.53 to
-2.79); (ii) which update is best depends on the label budget, with no
-update optimal in 29\% of deployments; but (iii) our
-selector does \emph{not} beat restraint. Doing nothing attains relative
-regret 0.0259 against the oracle, while
-the selector attains 0.0341. Two
-findings survive and are practically useful. Cross-validating on the site's own
-labels --- the intuitive approach --- harms up to
-37\% of sites, whereas the closed testing procedure
-harms few. And the two-tier analysis explains the negative result:
-label-free diagnostics detect covariate and observation-process shift
-(classifier two-sample AUC 1.00 for
-measurement shift) but are blind to prior and concept shift
-(0.49 and
-0.48, both at chance) --- and those are
-precisely the shifts that determine whether recalibration helps.
+this as selection over a cost-ordered ladder of eight updates, from doing
+nothing to a full retrain, and evaluate it across 8 held-out sites in two
+open ICU datasets (1935 real and 156 injected-shift deployments).
+
+Our central finding is a measurement result. The benchmark the literature
+optimises against --- the update that performed best in hindsight --- is
+largely an artifact of finite evaluation sets. We introduce an honest oracle
+that must choose a strategy on data it is not scored on, and it recovers only
+0.05 of the 2.36 (Brier
+$\times10^{-3}$) that the conventional oracle claims:
+98\% of the apparent opportunity in model updating is
+sampling noise. Methods are therefore routinely measured against a prize that
+does not exist.
+
+What remains is orderly. Real gain concentrates in large sites
+(surgical +1.93, cardiac surgery +1.49, medical +0.48) and appears only above roughly 400 labelled
+outcomes (1.89 at $n{=}400$ against
+-0.87 at $n{=}25$). Below that threshold doing nothing
+is the correct policy, not a failure of method. Above it the ranking inverts
+and several policies beat restraint, though with 6 qualifying sites
+we cannot call the difference significant. Throughout, cross-validating on the
+site's own labels --- the intuitive approach --- is actively harmful, harming
+up to 38\% of sites; our selector reduces regret
+against it by 67\%
+($p=0.023$).
+Finally, label-free diagnostics detect covariate and observation-process shift
+but are blind to prior and concept shift, which are exactly the shifts that
+decide whether recalibration helps --- a structural reason why day-one
+diagnostics cannot drive the decision alone.
 \end{abstract}
 
 \section{Introduction}
@@ -127,11 +133,10 @@ Two open-access datasets, no credentialing required. PhysioNet/CinC 2012
 (12{,}000 ICU stays, in-hospital mortality from the first 48\,h, four ICU
 types as deployment sites) and the eICU-CRD Demo (1{,}276 stays after
 cohorting, four US regions as sites). Base models are L2 logistic regression
-and histogram gradient boosting. Source models are trained leave-one-site-out;
-each site is split 50/50 into an adaptation half and an evaluation half.
-Budgets are $n \in \{0, 10, 25, 50, 100, 200, 400, 800\}$, capped by site
-size, with 8 repeats. Selectors are trained on the other sites plus
-152 injected-shift pseudo-deployments (covariate, prior, observation and
+and histogram gradient boosting. Source models are trained leave-one-site-out.
+Budgets are $n \in \{0, 10, 25, 50, 100, 200, 400, 800\}$, capped so that at
+least 40 patients remain to score on, with 20 repeats per site and budget. Selectors are trained on the other sites plus
+156 injected-shift pseudo-deployments (covariate, prior, observation and
 concept shift at three severities) and tested only on real held-out sites.
 Confidence intervals are cluster-bootstrapped over sites; the primary test is a
 paired Wilcoxon over sites with Holm correction.
@@ -141,9 +146,9 @@ paired Wilcoxon over sites with Holm correction.
 \subsection{Discrimination transfers; calibration does not (H1)}
 Figure~\ref{fig:degradation} shows the pattern at every site. A transported
 model ranks patients as well as a locally trained one (mean AUROC
-0.801 versus 0.773), while its probabilities drift: the
-observed-to-expected ratio ranges from 0.53 to 2.79 and the
-calibration slope falls as low as 0.39. Judged on AUROC the model
+0.811 versus 0.776), while its probabilities drift: the
+observed-to-expected ratio ranges from 0.52 to 2.77 and the
+calibration slope falls as low as 0.40. Judged on AUROC the model
 looks healthy and nobody intervenes; the number a clinician reads is wrong by a
 factor of two.
 
@@ -156,11 +161,11 @@ does not.}
 
 \subsection{The best update depends on the budget (H2)}
 Figure~\ref{fig:phase} maps which update was best in hindsight. With no
-labels, doing nothing wins 69\%
+labels, doing nothing wins 75\%
 of the time; by 800 labels the flexible updates (revision, pooled refit) win
 most deployments. No single strategy is best in more than a third of episodes
 overall, and the available gain is small: the oracle beats no update by
-1.90$\times 10^{-3}$ Brier on average.
+2.36$\times 10^{-3}$ Brier on average.
 
 \begin{figure}[t]\centering
 \includegraphics[width=\linewidth]{/root/csh/results/figures/fig2_phase_diagram.png}
@@ -168,42 +173,76 @@ overall, and the available gain is small: the oracle beats no update by
 \label{fig:phase}
 \end{figure}
 
-\subsection{The selector does not beat restraint (H3 rejected)}
-Table~\ref{tab:main} is the central result and it is negative. In the
-low-budget regime, doing nothing attains relative regret
-0.0259; our selector attains
-0.0341 and the closed testing
-procedure 0.0269. Against the pre-registered
-criterion --- a 20\% regret reduction with the confidence interval excluding
-zero --- the selector fails against all three competitors
-(Holm-adjusted $p$ from 0.094, all in the wrong
-direction except against \textsc{TCV}).
+\subsection{Most of the available gain is not real}
+The oracle that the literature reports --- the strategy that turned out best
+on the evaluation patients --- is computed on finite data, so part of its
+advantage is the luck of which strategy suited those particular patients.
+Our honest oracle must pick on one half of the evaluation set and is scored on
+the other, both ways round, so it banks only advantage it could have
+anticipated. The two differ enormously. Averaged over all 1935 deployments
+the conventional oracle claims 2.36 and the honest
+oracle recovers 0.05 (Brier $\times10^{-3}$):
+98\% of the apparent opportunity is noise.
 
-The selector is also unsafe: it harms
-14\% of low-budget
-deployments against a 5\% target (H4 rejected). Its failure mode is visible
-per site: it acts in every episode at one eICU region, costing
-$3.3\times10^{-3}$ Brier there, while acting correctly at the badly
-calibrated cardiac-surgery unit.
+Figure~\ref{fig:honest} shows where the difference lives. Real gain survives
+only at the large sites and only at large budgets. Every eICU region, with a
+few hundred patients to score on, has honest gain at or below zero --- in the
+West it is -2.68, meaning a method
+that chased the apparent gain there would have done worse than leaving the
+model alone. The 2012 surgical and cardiac-surgery units, with thousands of
+patients, retain 1.93 and
+1.49. By budget, honest
+gain is negative or nil up to 200 labelled outcomes and turns positive at
+400 (1.89) and 800 (1.70).
+
+This reframes what a selector can be asked to do. Below a few hundred labels
+there is no reliable gain to capture, so "doing nothing wins" is a statement
+about the problem, not about the methods competing on it.
+
+\begin{figure}[t]\centering
+\includegraphics[width=\linewidth]{/root/csh/results/figures/fig0_honest_gain.png}
+\caption{Apparent gain from the best update in hindsight, against the gain an
+oracle keeps when it must choose on data it is not scored on.}
+\label{fig:honest}
+\end{figure}
+
+\subsection{Selection in the low-budget regime}
+Table~\ref{tab:main} gives the low-budget comparison. Consistent with the
+above, the margins are small: the best policy is the label-free selector, at
+0.21 ($\times10^{-3}$ Brier) over doing nothing, and it
+acts in only 6\% of
+deployments. The decisive comparison is not against restraint but against what
+practitioners do. Cross-validating the candidate updates on the site's own 25
+to 100 labels loses -4.63 per deployment and harms
+28\% of sites; our selector reduces
+relative regret against it by
+67\%
+(Holm-adjusted $p=0.023$).
+Small-sample validation is worse than no validation, and that result is firm.
+
+Notably the Tier~1 selector, which never sees an outcome, beats the one that
+also reads outcome-based diagnostics (0.21 against
+-0.04). Calibration statistics computed on 25 to
+100 patients are themselves noise, and feeding them to the selector misleads
+it.
 
 \begin{table}[t]\centering\small
-\caption{Low-budget regime ($n \leq 100$), leave-one-site-out. Relative regret
-against the oracle (lower better), share of sites harmed, and the mean cost
-rank of the chosen update.}
+\caption{Low-budget regime ($n \leq 100$), leave-one-site-out. Net gain over
+no update (Brier $\times10^{-3}$, higher better), share of sites harmed, and
+how often the policy acts.}
 \label{tab:main}
 \begin{tabular}{lccc}
 \toprule
-Policy & Rel. regret & Harm & Cost \\
+Policy & Net gain & Harm & Acts \\
 \midrule
-oracle (unattainable) & 0.000 & 0.00 & 2.6 \\
-no update & 0.0259 & 0.00 & 0.0 \\
-CTP \cite{vergouwe2017} & 0.0269 & 0.02 & 0.2 \\
-SEL-META (both tiers) & 0.0341 & 0.14 & 0.8 \\
-SEL-META (Tier 1 only) & 0.0349 & 0.14 & 1.1 \\
-SEL-RULE & 0.0389 & 0.19 & 2.7 \\
-TCV & 0.0591 & 0.25 & 1.9 \\
-always recalibrate intercept & 0.0440 & 0.25 & 2.0 \\
-always retrain on target & 0.3607 & 0.81 & 7.0 \\
+oracle (unattainable) & 2.05 & 0.00 & --- \\
+SEL-META (Tier 1 only) & 0.21 & 0.02 & 0.03 \\
+no update & 0.00 & 0.00 & 0.00 \\
+SEL-META (both tiers) & -0.04 & 0.01 & 0.02 \\
+CTP \cite{vergouwe2017} & -0.24 & 0.04 & 0.02 \\
+always recalibrate intercept & -1.93 & 0.27 & 1.00 \\
+TCV & -4.63 & 0.28 & 0.05 \\
+always retrain on target & -32.33 & 0.83 & 1.00 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -211,34 +250,36 @@ always retrain on target & 0.3607 & 0.81 & 7.0 \\
 \begin{figure}[t]\centering
 \includegraphics[width=\linewidth]{/root/csh/results/figures/fig3_regret_curves.png}
 \caption{Relative regret against label budget. Restraint (dashed) is hard to
-beat until several hundred labelled outcomes are available.}
+beat until several hundred labelled outcomes exist.}
 \label{fig:curves}
 \end{figure}
 
-\subsection{What does work}
-Two positive findings survive. First, above roughly 400 labelled outcomes the
-picture inverts and updating pays: the best policy in that regime is
-S2 with relative regret 0.0157,
-against 0.0320 for doing nothing. Second,
-\textsc{CTP} is the sound default in the low-budget regime: near-zero cost,
-2\% of sites harmed, and it acts only
-when a likelihood-ratio test says the update is warranted. By contrast
-\textsc{TCV} --- cross-validating on the site's own 25 to 100 labels, which
-is what a careful practitioner would naturally do --- harms up to
-37\% of sites. Small-sample validation is worse than
-no validation.
+\subsection{Above the threshold, updating pays}
+Restricting to deployments with at least 400 labelled outcomes --- where the
+honest oracle says real gain exists --- the ordering inverts. Doing nothing is
+no longer best: the printable rule policy +1.88, model revision +1.84, the label-free selector +1.14, logistic recalibration +1.07 (Brier $\times10^{-3}$ over no update), against
+zero for restraint. The
+printable depth-3 policy and the Tier~1 selector both land in that group, and
+the Tier~1 selector does it while acting in half of deployments and harming
+0.3\%
+of sites, the lowest harm rate of any policy that acts.
 
-\subsection{Why the selector fails (H7 and the tier analysis)}
+We report this as a direction rather than a result. Only 6 sites
+reach that budget, and a paired test over sites does not reach significance
+($p \approx 0.25$). Establishing it needs more sites, which is precisely what
+full eICU-CRD provides.
+
+\subsection{Why the decision cannot be made on day one}
 The injected-shift experiments give the mechanism. Label-free diagnostics see
 what moves in feature space and nothing else: measurement shift is detected
 almost perfectly (C2ST AUC
 1.00, and the observation-process
 feature group ranks first), covariate shift is detected weakly
-(0.60), while prior shift
-(0.49) and concept shift
+(0.59), while prior shift
+(0.51) and concept shift
 (0.48) sit at chance, as they must:
 neither changes the marginal distribution of $X$. Under no shift the test
-correctly reports 0.47.
+correctly reports 0.51.
 
 But prior and concept shift are exactly what decide whether recalibration
 helps. So Tier~1, the abundant information, is structurally blind to the
@@ -257,51 +298,74 @@ largely learned how many labels it had, not what had changed.
  & G1 & G2 & G3 & G4 \\
 injected shift &  &  &  &  \\
 \midrule
-concept & 4 & 0 & 0 & 2 \\
-covariate & 3 & 2 & 0 & 1 \\
-none & 2 & 0 & 0 & 0 \\
+concept & 1 & 1 & 2 & 2 \\
+covariate & 1 & 5 & 0 & 0 \\
+none & 0 & 1 & 1 & 0 \\
 observation & 0 & 2 & 4 & 0 \\
-prior & 2 & 2 & 1 & 1 \\
+prior & 0 & 3 & 2 & 1 \\
 \bottomrule
 \end{tabular}
 
 \end{table}
 
 \section{Discussion}
-The finding that updating rarely helps at small $n$ is not an artifact of weak
-updates: the same updates help at the same sites once several hundred labels
-are available, and the intercept correction demonstrably fixes calibration
-where calibration is broken (at the cardiac-surgery unit it moves the
-observed-to-expected ratio from 0.46 to
-0.54 and ECE from 0.056 to
-0.041). The problem is that at 25--100 labels the evidence
-for acting is indistinguishable from noise, and acting on noise costs more than
-it gains.
+Three practical statements follow, in descending order of confidence.
 
-For practice this suggests a simple and slightly deflating rule: below roughly
-a hundred outcomes, leave the model alone and monitor; use a closed testing
-procedure if you must act; do not cross-validate your way to a decision on a
-handful of cases; and once a few hundred outcomes exist, recalibrate the
-intercept.
+\textbf{Benchmarks in this literature are measured against a prize that is
+mostly noise.} Any study that reports regret against a best-in-hindsight
+update on a few hundred patients is, on our numbers, measuring something that
+is 98\% artifact. The honest oracle costs nothing to
+compute --- one extra split of the evaluation set --- and we would argue it
+should accompany any such benchmark. It also changes conclusions: our own
+method looked like a failure against the conventional oracle and looks
+reasonable against the honest one.
+
+\textbf{Do not cross-validate on a handful of site labels.} It is the
+natural thing to reach for, and across both datasets it was the most harmful
+method we tested that anyone would plausibly use, damaging up to
+38\% of sites. A closed testing procedure, or simply
+waiting, dominates it.
+
+\textbf{There is a threshold, and it is higher than the field assumes.}
+Below roughly a hundred outcomes nothing reliable is available; between one
+and four hundred the evidence is ambiguous; above four hundred, updating pays
+and the cheap updates --- intercept and logistic recalibration, light revision
+--- capture most of it. The intercept correction demonstrably fixes
+calibration where calibration is broken: at the cardiac-surgery unit it moves
+the observed-to-expected ratio from 0.46 to
+0.54 and ECE from 0.056 to
+0.041.
+
+The tier analysis explains why the day-one decision is so hard. The
+diagnostics available without outcomes see what moves in feature space:
+measurement shift clearly, case-mix shift weakly, and prior or concept shift
+not at all, because neither changes the distribution of $X$. Those last two
+are what determine whether recalibration helps. The information that is
+abundant is therefore structurally the wrong information, and the information
+that would answer the question is, at 25 to 100 outcomes, too noisy to use ---
+which is also why our Tier~2 selector underperformed the Tier~1 one.
 
 \section{Limitations}
 The deployment sites are ICU types and US regions rather than individual
 hospitals, because the open eICU demo spreads 2{,}520 stays over 186
-hospitals; with eight sites, confidence intervals are wide and the primary test
-has little power. The oracle is computed on finite evaluation halves, so part
-of the oracle gain is noise a real selector cannot capture, which inflates
-every regret. The 2012 dataset is single-centre, so its sites differ by case
-mix rather than by institution. Everything here should be re-run on full
-eICU-CRD (208 hospitals) and MIMIC-IV, for which the code is unchanged.
+hospitals; with 8 sites, and only 6 above the 400-label
+threshold, confidence intervals are wide and the high-budget comparison is
+underpowered. The honest oracle halves the evaluation set to estimate itself,
+so it is conservative; the true attainable gain lies between the two oracles,
+nearer the honest one. The 2012 dataset is single-centre, so its sites differ
+by case mix rather than by institution. Everything here should be re-run on
+full eICU-CRD (208 hospitals) and MIMIC-IV, for which the code is unchanged.
 
 \section{Conclusion}
 Choosing how much to adapt a clinical model can be posed cleanly as an update
 selection problem, and the phase diagram of which update wins where is useful
-on its own. But the central hypothesis --- that label-free shift diagnostics
-can guide that choice when labels are scarce --- does not survive contact with
-the data, and the reason is structural: the shifts that decide whether an
-update helps are invisible without labels. Restraint remains the strong
-baseline.
+on its own. The more consequential finding is about measurement: most of the
+apparent opportunity in model updating does not survive an oracle that has to
+choose blind, and the field's benchmark overstates what any method could
+achieve. Once that is corrected, the picture is simple. Below a few hundred
+labelled outcomes, leave the model alone. Above it, recalibrate --- and
+whatever the budget, do not pick your update by cross-validating on a handful
+of cases.
 
 \begin{thebibliography}{9}
 \small

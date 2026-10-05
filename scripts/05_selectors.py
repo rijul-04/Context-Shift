@@ -110,6 +110,8 @@ def summarise(res: pd.DataFrame, mask_name: str, mask) -> pd.DataFrame:
             "regret": sub["regret"].mean(),
             "harm_rate": h, "harm_lo": hlo, "harm_hi": hhi,
             "net_gain": sub["net_gain"].mean(),
+            "rel_regret_honest": (sub["rel_regret_honest"].mean()
+                                  if "rel_regret_honest" in sub else float("nan")),
             "helped_rate": float((sub["net_gain"] > 0.002).mean()),
             "top1_acc": sub["correct"].mean(),
             "mean_cost": sub["cost"].mean(),
@@ -139,7 +141,17 @@ def primary_test(res: pd.DataFrame, mask) -> pd.DataFrame:
 
 def main():
     df = pd.read_pickle(PROC / "episodes_real.pkl")
-    print(f"{len(df)} episodes, "
+    gain = df["brier_S0"] - df["brier_oracle"]
+    gain_h = df["brier_S0"] - df["brier_oracle_honest"]
+    print(f"available gain: apparent {gain.mean()*1000:.2f}e-3 Brier, "
+          f"honest {gain_h.mean()*1000:.2f}e-3 "
+          f"({100*(1-gain_h.mean()/max(gain.mean(),1e-9)):.0f}% of the apparent "
+          f"gain is sampling noise)")
+    per_site = (df.assign(g=gain, gh=gain_h)
+                .groupby(["dataset", "target"])[["g", "gh"]].mean() * 1000)
+    print("\nreal gain available per site (Brier x1e-3):")
+    print(per_site.round(2).to_string())
+    print(f"\n{len(df)} episodes, "
           f"{df['dataset'].nunique()} datasets, "
           f"{df.groupby(['dataset', 'target']).ngroups} target domains")
 
@@ -156,8 +168,8 @@ def main():
         t = summarise(res, name, mask)
         tables.append(t)
         print(f"\n=== {name} (n <= {LOW_BUDGET_MAX} if low) ===")
-        print(t[["policy", "rel_regret", "ci_lo", "ci_hi", "net_gain",
-                 "helped_rate", "harm_rate", "top1_acc", "mean_cost"]]
+        print(t[["policy", "rel_regret", "rel_regret_honest", "ci_lo", "ci_hi",
+                 "net_gain", "helped_rate", "harm_rate", "top1_acc", "mean_cost"]]
               .to_string(index=False, float_format=lambda v: f"{v:.4f}"))
     summary = pd.concat(tables, ignore_index=True)
     summary.to_csv(RESULTS / "selector_summary.csv", index=False)

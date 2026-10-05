@@ -29,6 +29,18 @@ def main():
     h1 = pd.read_csv(RESULTS / "h1_degradation.csv")
     c2st = inj[inj["n"] == 0].groupby("shift_type")["t1_c2st_auc"].mean()
 
+    gain = ep["brier_S0"] - ep["brier_oracle"]
+    gain_h = ep["brier_S0"] - ep["brier_oracle_honest"]
+    noise_pct = 100 * (1 - gain_h.mean() / gain.mean())
+    per_site = (ep.assign(g=gain * 1000, gh=gain_h * 1000)
+                .groupby(["dataset", "target"])[["g", "gh", "n_eval"]].mean()
+                .sort_values("gh", ascending=False))
+    by_budget = ep.assign(gh=gain_h * 1000).groupby("n")["gh"].mean()
+    lo_gain = (res[(res["n"] <= 100) & (res["policy"] != "oracle")]
+               .groupby("policy")["net_gain"].mean() * 1000)
+    hi_gain = (res[(res["n"] >= 400) & (res["policy"] != "oracle")]
+               .groupby("policy")["net_gain"].mean() * 1000).sort_values(
+        ascending=False)
     big = (res[(res["n"] >= 400) & (res["policy"] != "oracle")]
            .groupby("policy")["rel_regret"].mean().sort_values())
     tcv_harm = (res[res["policy"] == "TCV"]
@@ -53,6 +65,16 @@ def main():
         f'<td class="num">{b*100:.0f}%</td><td class="tag">{t}</td></tr>'
         for n, a, b, t in rows)
 
+    site_rows = "\n".join(
+        f'<tr><td>{t.replace("_", " ")}</td><td class="num">{int(r.n_eval)}</td>'
+        f'<td class="num">{r.g:+.2f}</td><td class="num">{r.gh:+.2f}</td>'
+        f'<td class="tag">{"real" if r.gh > 0.3 else "noise"}</td></tr>'
+        for (ds, t), r in per_site.iterrows())
+    budget_rows = "\n".join(
+        f'<tr><td class="num">{n}</td><td class="num">{v:+.2f}</td>'
+        f'<td class="tag">{"worth acting" if v > 0.3 else "nothing to gain"}</td></tr>'
+        for n, v in by_budget.items())
+
     shift_rows = "\n".join(
         f'<tr><td>{k}</td><td class="num">{v:.2f}</td>'
         f'<td>{"detected" if v > 0.55 else "invisible"}</td></tr>'
@@ -60,10 +82,14 @@ def main():
 
     hgb = h1[h1["model"] == "hgb"]
     stats = [
-        ("8", "deployment sites", "4 ICU types, 4 US regions"),
-        (f"{len(ep)}", "real deployments", "8 label budgets x 8 repeats"),
-        (f"{len(inj)}", "injected shifts", "with a known cause"),
-        (f"{hgb['ext_oe'].min():.2f}-{hgb['ext_oe'].max():.2f}", "O/E range", "1.0 would be perfect"),
+        (f"{noise_pct:.0f}%", "of the apparent gain is noise",
+         "measured against an oracle that must choose blind"),
+        ("~400", "labels before updating pays",
+         f"honest gain {by_budget.loc[400]:+.2f} vs {by_budget.loc[25]:+.2f} at 25"),
+        (f"{len(ep)}", "real deployments",
+         f"{ep['n_eval'].mean():.0f} patients scored on average"),
+        (f"{hgb['ext_oe'].min():.2f}-{hgb['ext_oe'].max():.2f}", "O/E range",
+         "1.0 would be perfect"),
     ]
     stat_html = "\n".join(
         f'<div class="stat"><div class="stat-v">{v}</div>'
@@ -75,6 +101,20 @@ def main():
   <img src="{img(name)}" alt="{title}">
   <figcaption>{caption}</figcaption>
 </figure>"""
+
+    gain_mean, gain_h_mean = gain.mean() * 1000, gain_h.mean() * 1000
+    pretty = {"always-S2": "intercept recalibration",
+              "always-S3": "logistic recalibration",
+              "always-S5": "model revision", "always-S6": "pooled refit",
+              "SEL-RULE-both": "the printable rule policy",
+              "SEL-META-t1": "the label-free selector",
+              "SEL-META-both": "the two-tier selector", "CTP": "closed testing",
+              "TCV": "cross-validation"}
+    hi_top = ", ".join(f"{pretty.get(k, k)} {v:+.2f}"
+                       for k, v in hi_gain.head(4).items())
+    lo_best = lo_gain.max()
+    tcv_lo = lo_gain.loc["TCV"]
+    tcv_harm = tcv_harm * 100
 
     html = f"""<title>ContextShift-Health Findings</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -169,18 +209,20 @@ footer {{ color: var(--ink-3); font-size: .85rem; margin-top: 1.4rem; }}
   <h1>When a risk model moves hospital, should you update it?</h1>
   <p class="lead">We built the full decision machinery &mdash; eight ways to
   update a mortality model, eighteen shift measurements, a selector trained to
-  choose between them &mdash; and tested it on 8 deployment sites. The honest
-  answer is that below a few hundred labelled outcomes, the best thing to do is
-  usually nothing.</p>
+  choose between them &mdash; and tested it across 8 deployment sites. Then we
+  checked whether the thing everyone optimises for is real. Mostly it is
+  not.</p>
 </header>
 
 <div class="stats">{stat_html}</div>
 
 <div class="verdict">
   <h3>The one-line verdict</h3>
-  <p>Our central hypothesis failed, and the failure has a clean explanation:
-  the shifts that decide whether an update helps are exactly the ones that
-  cannot be seen without outcome labels.</p>
+  <p>{noise_pct:.0f}% of the apparent benefit of updating a clinical model is
+  sampling noise, not benefit. Once that is removed, real gain exists only at
+  large sites and only above roughly 400 labelled outcomes &mdash; and below
+  that threshold, leaving the model alone is the correct decision rather than
+  a failure to find a better one.</p>
 </div>
 
 <h2><span class="h">Finding 01 &middot; hypothesis H1 supported</span>
@@ -207,32 +249,57 @@ worth asking in the first place.</p>
         "Share of deployments in which each update turned out best. Read a row "
         "as: with this many labels, this is how often each choice was right.")}
 
-<h2><span class="h">Finding 03 &middot; hypothesis H3 rejected</span>
-The selector does not beat doing nothing</h2>
-<p>This is the result we did not want. Every method is scored by regret against
-the best update in hindsight, and by how often it leaves a site worse off than
-before. Doing nothing cannot harm anyone by construction, and it is also close
-to the best achievable score.</p>
+<h2><span class="h">Finding 03 &middot; the central result</span>
+Most of the benefit on offer was never there</h2>
+<p>Every method in this field is scored against the update that turned out
+best in hindsight. That benchmark is computed on a finite number of patients,
+so some of its advantage is simply which update happened to suit those
+particular people. We tested how much by building a stricter referee: an
+oracle that has to choose a strategy on one half of the patients and is then
+judged on the other half, so luck it could not have predicted earns it
+nothing.</p>
+<p>The conventional oracle claims a gain of {gain_mean:.2f}. The honest one
+keeps <strong>{gain_h_mean:.2f}</strong>. In other words
+<strong>{noise_pct:.0f}% of the opportunity that methods are measured against
+does not exist</strong>. This is cheap to check &mdash; one extra split &mdash;
+and we think any study reporting this kind of benchmark should do it.</p>
+{figure("fig0_honest_gain.png", "Apparent versus real gain",
+        "Orange is the gain the usual benchmark claims; blue is what survives "
+        "when the oracle must choose blind. Left: by site, smallest first. "
+        "Right: by how many labelled outcomes the site has.")}
+<p>Where the real gain lives is orderly. It needs a large site and a real
+label budget:</p>
 <div class="tablewrap">
 <table>
-  <thead><tr><th>Policy</th><th class="num">Regret</th>
-  <th class="num">Sites harmed</th><th></th></tr></thead>
-  <tbody>{table_rows}</tbody>
+  <thead><tr><th>Site</th><th class="num">Patients scored</th>
+  <th class="num">Apparent</th><th class="num">Real</th><th></th></tr></thead>
+  <tbody>{site_rows}</tbody>
 </table>
 </div>
-<p>Two things in that table are worth more than our failed hypothesis.
-<strong>Cross-validating on the site's own labels harms up to
-{tcv_harm*100:.0f}% of sites</strong> &mdash; and that is the approach a careful
-practitioner would reach for first. With 25 to 100 outcomes, small-sample
-validation is worse than no validation at all. Meanwhile the
-<strong>closed testing procedure</strong>, a statistical method from 2017,
-quietly does the best job of any real method.</p>
-{figure("fig3_regret_curves.png", "Regret against label budget",
-        "Lower is better. The dashed line is doing nothing. Every method "
-        "sits above it until several hundred labelled outcomes exist.")}
+<div class="tablewrap">
+<table>
+  <thead><tr><th class="num">Labelled outcomes</th>
+  <th class="num">Real gain</th><th></th></tr></thead>
+  <tbody>{budget_rows}</tbody>
+</table>
+</div>
+
+<h2><span class="h">Finding 03b &middot; what to do instead</span>
+Below the threshold, restraint; above it, recalibrate</h2>
+<p>In the low-budget regime the margins are small and the label-free selector
+is narrowly the best policy ({lo_best:+.2f}), acting in only a small minority
+of deployments. The clear result there is a negative one about practice:
+<strong>cross-validating on the site&rsquo;s own 25&ndash;100 labels loses
+{tcv_lo:.2f} per deployment and harms {tcv_harm:.0f}% of sites</strong>. It is
+the first thing a careful person reaches for, and it is the most harmful
+method anyone would plausibly use.</p>
+<p>Above 400 labelled outcomes the ranking inverts and updating pays:
+{hi_top}, all measured against zero for doing nothing. With only six sites
+reaching that budget we report this as a direction rather than a proven
+result.</p>
 {figure("fig4_policy_comparison.png", "Accuracy and safety side by side",
         "A method has to be both close to optimal and rarely harmful. "
-        "Bars show the low-budget regime, up to 100 labelled cases.")}
+        "Low-budget regime, up to 100 labelled cases.")}
 
 <h2><span class="h">Finding 04 &middot; hypothesis H7 supported</span>
 Why it failed: label-free diagnostics are blind to the shift that matters</h2>
