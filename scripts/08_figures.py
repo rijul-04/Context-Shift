@@ -135,6 +135,59 @@ def fig_honest_gain(ep: pd.DataFrame):
     save(fig, FIGS / "fig0_honest_gain.png")
 
 
+def fig7_oracle_theory():
+    """Simulation with known ground truth: the oracle inflates, we predict it."""
+    path = RESULTS / "oracle_simulation.csv"
+    if not path.exists():
+        return
+    sim = pd.read_csv(path)
+    null = sim[sim["experiment"].fillna("no true gain") == "no true gain"]
+    known = sim[sim["experiment"] == "known gain"]
+    if null.empty:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(9.8, 3.9))
+
+    ax = axes[0]
+    colours = {2: SERIES["aqua"], 4: SERIES["orange"], 8: SERIES["blue"]}
+    for k, g in null.groupby("k"):
+        g = g.sort_values("m")
+        ax.plot(g["m"], g["apparent"], color=colours[k], marker="o",
+                label=f"{k} strategies")
+        ax.plot(g["m"], g["predicted_inflation"], color=colours[k],
+                ls=":", lw=1.6)
+        label_end(ax, g["m"].iloc[-1], g["apparent"].iloc[-1], f"K={k}",
+                  colours[k])
+    hon = null.groupby("m")["honest"].mean()
+    ax.plot(hon.index, hon.values, color=INK_2, ls="--", lw=1.8)
+    label_end(ax, hon.index[-1], hon.values[-1], "honest", INK_2)
+    ax.axhline(0, color=INK_MUTED, lw=1)
+    ax.set_xscale("log")
+    ax.set_xticks(sorted(null["m"].unique()),
+                  [str(int(v)) for v in sorted(null["m"].unique())])
+    ax.set_xlim(null["m"].min() * 0.8, null["m"].max() * 2.6)
+    ax.set_xlabel("patients the site is evaluated on")
+    ax.set_ylabel("reported gain ($\\times 10^{-3}$ Brier)")
+    ax.set_title("Truth is zero: everything above the line is invented")
+    ax.legend(loc="upper right", fontsize=8.5)
+
+    ax = axes[1]
+    x = np.arange(len(known))
+    w = 0.26
+    ax.bar(x - w, known["true_gain"], w, color=INK_2, label="true gain")
+    ax.bar(x, known["apparent"], w, color=SERIES["orange"],
+           label="conventional oracle")
+    ax.bar(x + w, known["honest"], w, color=SERIES["blue"],
+           label="honest oracle")
+    ax.set_xticks(x, [f"{int(m)} patients" for m in known["m"]])
+    ax.set_ylabel("gain ($\\times 10^{-3}$ Brier)")
+    ax.set_title("A real gain, measured three ways")
+    ax.legend(fontsize=8.5)
+    fig.suptitle("Dotted lines are the theory's prediction, not a fit",
+                 fontsize=11.5, fontweight="bold", color=INK, y=1.04)
+    save(fig, FIGS / "fig7_oracle_theory.png")
+
+
 def fig3_regret_curves():
     """H3 and the Tier 1 / Tier 2 crossover."""
     curve = pd.read_csv(RESULTS / "regret_by_budget.csv", index_col=0)
@@ -244,6 +297,7 @@ def main():
     ep = pd.read_pickle(PROC / "episodes_real.pkl")
     print("figures:")
     fig_honest_gain(ep)
+    fig7_oracle_theory()
     fig1_degradation()
     fig2_phase_diagram(ep)
     fig3_regret_curves()

@@ -97,11 +97,11 @@ def one_injected(ds, kind, shift_type, severity, fold, X, y, dom, cols, gi):
             row["oe_S0"] = oe_ratio(yt[evalu], preds["S0"])
             best = min(LADDER, key=lambda k: row[f"brier_{k}"])
             row["oracle"], row["brier_oracle"] = best, row[f"brier_{best}"]
-            hb, hp = honest_oracle(yt[evalu], preds,
-                                   np.random.default_rng(rr.integers(2**32)))
+            hb, hg, hp = honest_oracle(
+                yt[evalu], preds, np.random.default_rng(rr.integers(2**32)))
             row["brier_oracle_honest"], row["oracle_honest_picks"] = hb, hp
             row["oracle_gain"] = row["brier_S0"] - row["brier_oracle"]
-            row["oracle_gain_honest"] = row["brier_S0"] - hb
+            row["oracle_gain_honest"] = hg
             rows.append(row)
 
     out = pd.DataFrame(rows)

@@ -33,6 +33,12 @@ def main():
     prim = pd.read_csv(RESULTS / "primary_test.csv")
     curve = pd.read_csv(RESULTS / "regret_by_budget.csv", index_col=0)
     imp = pd.read_csv(RESULTS / "meta_importance.csv")
+    sim_path = RESULTS / "oracle_simulation.csv"
+    sim = pd.read_csv(sim_path) if sim_path.exists() else pd.DataFrame()
+    if not sim.empty:
+        sim["experiment"] = sim["experiment"].fillna("no true gain")
+        nullsim = sim[(sim["experiment"] == "no true gain") & (sim["k"] == 8)]
+        knownsim = sim[sim["experiment"] == "known gain"]
     h7 = pd.read_csv(RESULTS / "h7_diagnosis.csv", index_col=0)
     h7.index.name = "injected shift"
     rel = pd.read_csv(RESULTS / "reliability_example.csv", index_col=0)
@@ -331,6 +337,67 @@ overall, and the available gain is small: the oracle beats no update by
 \includegraphics[width=\linewidth]{{{FIGS}/fig2_phase_diagram.png}}
 \caption{{Share of deployments in which each update was best in hindsight.}}
 \label{{fig:phase}}
+\end{{figure}}
+
+\subsection{{How much an oracle inflates, in theory}}
+Let $K$ strategies have true losses $b_k$ at a site and observed losses
+$\hat b_k = b_k + \varepsilon_k$, estimated on the same $m$ patients. The
+reported oracle is $\min_k \hat b_k$, and because the minimum of noisy
+estimates buys the noise along with the signal,
+$\mathbb{{E}}[\min_k \hat b_k] < \min_k b_k$. Writing the errors as
+$\varepsilon_k = \sqrt{{\rho}}\,Z_0 + \sqrt{{1-\rho}}\,Z_k$, the shared term
+$Z_0$ moves every strategy together and cancels in a comparison against no
+update, so the inflation of the reported \emph{{gain}} is
+
+\begin{{equation}}
+\mathbb{{E}}[\text{{inflation}}] = \sigma_{{\Delta}} \cdot
+  \mathbb{{E}}\!\left[\max_{{k \leq K}} Z_k\right],
+\qquad
+\mathbb{{E}}\!\left[\max_{{k \leq K}} Z_k\right] =
+  K\!\int z\,\phi(z)\,\Phi(z)^{{K-1}}\,dz,
+\label{{eq:inflation}}
+\end{{equation}}
+
+where $\sigma_{{\Delta}}$ is the standard error of a \emph{{paired}}
+difference in Brier between two strategies. Two consequences follow
+immediately. The inflation grows with the number of strategies compared
+($\mathbb{{E}}[\max] = 0.56$ for $K{{=}}2$ and $1.42$ for $K{{=}}8$) and
+shrinks as $m^{{-1/2}}$, so a study that compares more methods on fewer
+patients reports a larger prize for the same reality.
+
+\subsection{{The theory tested against known ground truth}}
+Equation~\ref{{eq:inflation}} is a prediction, so we tested it where the
+truth is ours to set. Figure~\ref{{fig:theory}} shows two simulations.
+
+In the first, every strategy is genuinely equally good: the true available
+gain is exactly zero, and anything reported is inflation. The conventional
+oracle nevertheless reports
+{f(nullsim.sort_values("m").iloc[0]["apparent"], 2)} at
+$m{{=}}{int(nullsim.sort_values("m").iloc[0]["m"])}$ patients, falling to
+{f(nullsim.sort_values("m").iloc[-1]["apparent"], 2)} at
+$m{{=}}{int(nullsim.sort_values("m").iloc[-1]["m"])}$ (Brier
+$\times10^{{-3}}$), tracking the predicted
+{f(nullsim.sort_values("m").iloc[0]["predicted_inflation"], 2)} and
+{f(nullsim.sort_values("m").iloc[-1]["predicted_inflation"], 2)} without any
+fitted parameter. The honest oracle reports
+{f(nullsim["honest"].mean(), 3)} on average: it is unbiased where the
+conventional one is not.
+
+In the second, one strategy is genuinely better, and we measure the truth on
+20{{,}}000 independent patients. At $m{{=}}{int(knownsim.iloc[0]["m"])}$ the
+true gain is {f(knownsim.iloc[0]["true_gain"], 2)}, the conventional oracle
+claims {f(knownsim.iloc[0]["apparent"], 2)} --- an overstatement of
+{f((knownsim.iloc[0]["apparent"] / knownsim.iloc[0]["true_gain"] - 1) * 100, 0)}\%
+--- and the honest oracle recovers {f(knownsim.iloc[0]["honest"], 2)}. By
+$m{{=}}{int(knownsim.iloc[-1]["m"])}$ all three agree. The honest oracle is
+mildly conservative, since it selects on half the patients; that is the
+correct direction for a claim about how much is available.
+
+\begin{{figure}}[t]\centering
+\includegraphics[width=\linewidth]{{{FIGS}/fig7_oracle_theory.png}}
+\caption{{Simulation with known ground truth. Dotted lines are
+Equation~\ref{{eq:inflation}}, not a fit.}}
+\label{{fig:theory}}
 \end{{figure}}
 
 \subsection{{Most of the available gain is not real}}

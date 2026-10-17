@@ -50,29 +50,37 @@ def draw_labelled(target_idx, n, rng):
     return np.sort(rng.choice(target_idx, size=n, replace=False))
 
 
-def honest_oracle(y_eval, preds: dict[str, np.ndarray], rng) -> tuple[float, str]:
+def honest_oracle(y_eval, preds: dict[str, np.ndarray], rng):
     """Oracle that must choose on data it is not scored on.
 
-    Split the evaluation patients in two, pick the best strategy on each half,
-    score that choice on the other half, average the two. Any part of the
-    plain oracle's advantage that is sampling noise disappears here.
+    Split the evaluation patients in two; pick the best strategy on one half
+    and score it on the other, both ways round. The gain is measured against
+    no update *on the same held-out patients*, which matters: comparing a
+    half-sample score against a full-sample reference mixes two different
+    patient sets and adds noise to the difference for no reason.
+
+    Returns (honest Brier, honest gain over no update, the two picks).
     """
     n = len(y_eval)
     idx = rng.permutation(n)
     a, b = idx[: n // 2], idx[n // 2:]
     if len(a) < 10 or len(b) < 10:
-        return float("nan"), ""
-    scores = []
-    picks = []
+        return float("nan"), float("nan"), ""
+
+    scores, gains, picks = [], [], []
     for fit_half, score_half in ((a, b), (b, a)):
         if len(np.unique(y_eval[fit_half])) < 2:
             continue
-        best = min(LADDER, key=lambda k: brier(y_eval[fit_half], preds[k][fit_half]))
+        best = min(LADDER,
+                   key=lambda k: brier(y_eval[fit_half], preds[k][fit_half]))
+        s_best = brier(y_eval[score_half], preds[best][score_half])
+        s_ref = brier(y_eval[score_half], preds["S0"][score_half])
         picks.append(best)
-        scores.append(brier(y_eval[score_half], preds[best][score_half]))
+        scores.append(s_best)
+        gains.append(s_ref - s_best)          # paired on the same patients
     if not scores:
-        return float("nan"), ""
-    return float(np.mean(scores)), "|".join(picks)
+        return float("nan"), float("nan"), ""
+    return float(np.mean(scores)), float(np.mean(gains)), "|".join(picks)
 
 
 def run_target(X, y, dom, target, kind, group_idx, dataset, cols,
@@ -135,13 +143,13 @@ def run_target(X, y, dom, target, kind, group_idx, dataset, cols,
             row["oracle"] = best
             row["brier_oracle"] = row[f"brier_{best}"]
 
-            hb, hpicks = honest_oracle(y[evalu], preds,
-                                       np.random.default_rng(rng.integers(2**32)))
+            hb, hg, hpicks = honest_oracle(
+                y[evalu], preds, np.random.default_rng(rng.integers(2**32)))
             row["brier_oracle_honest"] = hb
             row["oracle_honest_picks"] = hpicks
             # how much of the apparent gain survives having to choose blind
             row["oracle_gain"] = row["brier_S0"] - row["brier_oracle"]
-            row["oracle_gain_honest"] = row["brier_S0"] - hb
+            row["oracle_gain_honest"] = hg
             rows.append(row)
     return rows
 
