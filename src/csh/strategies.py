@@ -20,14 +20,18 @@ from .config import SEED
 from .metrics import clip
 from .models import fit, make_model, predict_proba
 
-LADDER = ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7"]
-COST_RANK = {"S0": 0, "S1": 1, "S2": 2, "S3": 3, "S4": 4, "S5": 5, "S6": 6, "S7": 7}
-NEEDS_LABELS = {"S0": False, "S1": False, "S2": True, "S3": True,
-                "S4": False, "S5": True, "S6": True, "S7": True}
+LADDER = ["S0", "S1", "S2", "S8", "S3", "S4", "S5", "S6", "S9", "S7"]
+LADDER_CORE = ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7"]  # the first 8
+COST_RANK = {"S0": 0, "S1": 1, "S2": 2, "S8": 3, "S3": 4, "S4": 5,
+             "S5": 6, "S6": 7, "S9": 8, "S7": 9}
+NEEDS_LABELS = {"S0": False, "S1": False, "S2": True, "S8": True, "S3": True,
+                "S4": False, "S5": True, "S6": True, "S9": True, "S7": True}
 LABELS = {
     "S0": "no update", "S1": "prior correction", "S2": "intercept recal",
-    "S3": "logistic recal", "S4": "importance-weighted refit",
-    "S5": "model revision", "S6": "pooled refit", "S7": "target-only retrain",
+    "S8": "shrunk intercept", "S3": "logistic recal",
+    "S4": "importance-weighted refit", "S5": "model revision",
+    "S6": "pooled refit", "S9": "source-target ensemble",
+    "S7": "target-only retrain",
 }
 
 
@@ -257,8 +261,40 @@ def S7(ctx: Ctx):
     return predict_proba(m, ctx.X_eval)
 
 
-FUNCS = {"S0": S0, "S1": S1, "S2": S2, "S3": S3,
-         "S4": S4, "S5": S5, "S6": S6, "S7": S7}
+def S8(ctx: Ctx, k0: float = 25.0):
+    """Intercept correction shrunk toward no update by the label budget.
+
+    The intercept estimated from n outcomes is itself noisy, and acting on it
+    in full is what makes S2 harmful at small n. Shrinking by n / (n + k0) is
+    the empirical-Bayes compromise: nothing at n=0, essentially the full
+    correction once n greatly exceeds k0.
+    """
+    if not _usable(ctx, 1):
+        return S1(ctx)
+    a = fit_intercept(ctx.y_lab, ctx.p("lab"))
+    n = len(ctx.y_lab)
+    a_shrunk = a * (n / (n + k0))
+    return expit(a_shrunk + logit(clip(ctx.p("eval"))))
+
+
+def S9(ctx: Ctx):
+    """Average the transported model with a pooled refit, in logit space.
+
+    Ensembling hedges: when the refit is wrong the source model pulls it
+    back, and vice versa. The weight follows the label budget, so a site
+    with few outcomes stays close to the model it was given.
+    """
+    if not _usable(ctx, 1):
+        return S1(ctx)
+    p_pool = S6(ctx)
+    n = len(ctx.y_lab)
+    w = n / (n + 200.0)                     # trust the refit only with labels
+    z = (1 - w) * logit(clip(ctx.p("eval"))) + w * logit(clip(p_pool))
+    return expit(z)
+
+
+FUNCS = {"S0": S0, "S1": S1, "S2": S2, "S8": S8, "S3": S3,
+         "S4": S4, "S5": S5, "S6": S6, "S9": S9, "S7": S7}
 
 
 def run_all(ctx: Ctx) -> dict[str, np.ndarray]:

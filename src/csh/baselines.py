@@ -37,6 +37,35 @@ def _sub_ctx(ctx: Ctx, lab_idx, eval_X) -> Ctx:
                cache=cache)
 
 
+def fold_scores(ctx: Ctx, n_splits: int = 3, seed: int = SEED):
+    """Per-fold Brier for every strategy, computed once per episode.
+
+    Both cross-validation baselines need exactly this, so it is cached on the
+    context: the fits are by far the most expensive part of an episode.
+    """
+    key = f"cv_folds_{n_splits}_{seed}"
+    if key in ctx.cache:
+        return ctx.cache[key]
+
+    y = np.asarray(ctx.y_lab)
+    n = len(y)
+    pos = int(y.sum())
+    folds = min(n_splits, pos, n - pos) if n else 0
+    if n < 10 or folds < 2:
+        ctx.cache[key] = None
+        return None
+
+    skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
+    per_fold: dict[str, list[float]] = {k: [] for k in LADDER}
+    for tr, te in skf.split(np.zeros(n), y):
+        sub = _sub_ctx(ctx, tr, ctx.X_lab[te])
+        p = run_all(sub)
+        for k in LADDER:
+            per_fold[k].append(brier(y[te], p[k]))
+    ctx.cache[key] = per_fold
+    return per_fold
+
+
 def tcv_pick(ctx: Ctx, preds_full: dict[str, np.ndarray] | None = None,
              n_splits: int = 3, seed: int = SEED,
              eps: float = EPS_TIE) -> tuple[str, dict]:
@@ -54,22 +83,53 @@ def tcv_pick(ctx: Ctx, preds_full: dict[str, np.ndarray] | None = None,
     for k in LABEL_FREE:
         scores[k] = brier(y, lf_preds[k])
 
-    folds = min(n_splits, pos, n - pos)
-    if folds >= 2:
-        skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
-        acc: dict[str, list[float]] = {k: [] for k in LADDER
-                                       if NEEDS_LABELS[k]}
-        for tr, te in skf.split(np.zeros(n), y):
-            sub = _sub_ctx(ctx, tr, ctx.X_lab[te])
-            p = run_all(sub)
-            for k in acc:
-                acc[k].append(brier(y[te], p[k]))
-        for k, v in acc.items():
-            scores[k] = float(np.mean(v))
+    per_fold = fold_scores(ctx, n_splits, seed)
+    if per_fold is not None:
+        for k in LADDER:
+            if NEEDS_LABELS[k]:
+                scores[k] = float(np.mean(per_fold[k]))
 
     best = min(scores, key=scores.get)
     cheap = [k for k in scores if scores[k] <= scores[best] + eps]
     return min(cheap, key=lambda k: COST_RANK[k]), scores
+
+
+def tcv_se_pick(ctx: Ctx, n_splits: int = 3, seed: int = SEED,
+                z: float = 1.0) -> tuple[str, dict]:
+    """Cross-validation that respects its own uncertainty.
+
+    Plain TCV picks the lowest cross-validated Brier, which on 25 to 100
+    outcomes is mostly noise: the winner is whichever strategy the folds
+    happened to favour. Here a strategy must beat no-update by more than `z`
+    standard errors of the fold-to-fold spread of that difference before it
+    is chosen; otherwise the site keeps the model it has.
+
+    This is the obvious correction to the baseline that harmed the most
+    sites, and it costs nothing extra: the fold scores are already computed.
+    """
+    y = np.asarray(ctx.y_lab)
+    n = len(y)
+    pos = int(y.sum())
+    if n < 10 or pos < 3 or (n - pos) < 3:
+        return "S0", {}
+
+    per_fold = fold_scores(ctx, n_splits, seed)
+    if per_fold is None:
+        return "S0", {}
+
+    ref = np.asarray(per_fold["S0"], dtype=float)
+    best, best_margin = "S0", 0.0
+    detail = {}
+    for k in LADDER:
+        if k == "S0":
+            continue
+        d = ref - np.asarray(per_fold[k], dtype=float)   # positive = better
+        mean_d = float(np.mean(d))
+        se = float(np.std(d, ddof=1) / np.sqrt(len(d))) if len(d) > 1 else np.inf
+        detail[k] = (mean_d, se)
+        if mean_d > z * se and mean_d > best_margin:
+            best, best_margin = k, mean_d
+    return best, detail
 
 
 def _loglik(y, p) -> float:

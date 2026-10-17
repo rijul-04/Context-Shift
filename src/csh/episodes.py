@@ -26,12 +26,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .baselines import ctp_pick, tcv_pick
+from .baselines import ctp_pick, tcv_pick, tcv_se_pick
 from .config import BUDGETS, N_REPEATS, SEED
 from .diagnostics import all_diagnostics, tier1
 from .metrics import brier, ece, oe_ratio
 from .models import fit, make_model, predict_proba, top_features, tune
-from .strategies import Ctx, LADDER, run_all
+from .strategies import Ctx, LADDER, LADDER_CORE, run_all
 
 MIN_EVAL = 40          # below this an episode cannot be scored meaningfully
 
@@ -124,6 +124,7 @@ def run_target(X, y, dom, target, kind, group_idx, dataset, cols,
 
             diag = all_diagnostics(ctx, group_idx, tier1_cache=t1)
             tcv, _ = tcv_pick(ctx)
+            tcv_se, _ = tcv_se_pick(ctx)
             ctp, _ = ctp_pick(ctx)
 
             row = {
@@ -131,7 +132,7 @@ def run_target(X, y, dom, target, kind, group_idx, dataset, cols,
                 "n": n, "rep": r, "tag": tag,
                 "n_eval": len(evalu), "events_eval": int(y[evalu].sum()),
                 "prev_eval": float(y[evalu].mean()),
-                "pick_tcv": tcv, "pick_ctp": ctp,
+                "pick_tcv": tcv, "pick_tcvse": tcv_se, "pick_ctp": ctp,
                 **diag,
             }
             for k in LADDER:
@@ -142,6 +143,11 @@ def run_target(X, y, dom, target, kind, group_idx, dataset, cols,
             best = min(LADDER, key=lambda k: row[f"brier_{k}"])
             row["oracle"] = best
             row["brier_oracle"] = row[f"brier_{best}"]
+            # same data, fewer candidates: the theory says the oracle's
+            # inflation grows with how many strategies it may choose from
+            best_core = min(LADDER_CORE, key=lambda k: row[f"brier_{k}"])
+            row["oracle_core"] = best_core
+            row["brier_oracle_core"] = row[f"brier_{best_core}"]
 
             hb, hg, hpicks = honest_oracle(
                 y[evalu], preds, np.random.default_rng(rng.integers(2**32)))

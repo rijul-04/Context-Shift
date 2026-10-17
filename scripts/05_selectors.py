@@ -69,6 +69,8 @@ def evaluate(df: pd.DataFrame, injected: pd.DataFrame | None = None
         policies["SEL-RULE-both"] = RuleSelector(tiers="both").fit(train).select(test)
 
         policies["TCV"] = list(test["pick_tcv"])
+        if "pick_tcvse" in test:
+            policies["TCV-SE (ours)"] = list(test["pick_tcvse"])
         policies["CTP"] = list(test["pick_ctp"])
         bf = best_fixed_on(train)
         policies["best-fixed"] = fixed_policy(test, bf)

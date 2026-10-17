@@ -20,7 +20,8 @@ from joblib import Parallel, delayed
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.csh import features                                     # noqa: E402
-from src.csh.baselines import ctp_pick, tcv_pick                 # noqa: E402
+from src.csh.baselines import (ctp_pick, tcv_pick,               # noqa: E402
+                                tcv_se_pick)
 from src.csh.config import PROC, RESULTS, SEED                   # noqa: E402
 from src.csh.diagnostics import all_diagnostics, tier1           # noqa: E402
 from src.csh.metrics import brier, ece, oe_ratio                 # noqa: E402
@@ -28,7 +29,8 @@ from src.csh.models import fit, make_model, predict_proba, top_features  # noqa:
 from src.csh.episodes import (MIN_EVAL, draw_labelled,            # noqa: E402
                               honest_oracle)
 from src.csh.shifts import SHIFT_TYPES, make_injected, severities  # noqa: E402
-from src.csh.strategies import Ctx, LADDER, run_all              # noqa: E402
+from src.csh.strategies import (Ctx, LADDER, LADDER_CORE,        # noqa: E402
+                                run_all)
 
 DATASETS = ["p2012", "eicu_demo"]
 KIND = "hgb"
@@ -88,7 +90,9 @@ def one_injected(ds, kind, shift_type, severity, fold, X, y, dom, cols, gi):
                 "shift_type": shift_type, "severity": severity,
                 "n_eval": len(evalu), "events_eval": int(yt[evalu].sum()),
                 "prev_eval": float(yt[evalu].mean()),
-                "pick_tcv": tcv_pick(ctx)[0], "pick_ctp": ctp_pick(ctx)[0],
+                "pick_tcv": tcv_pick(ctx)[0],
+                "pick_tcvse": tcv_se_pick(ctx)[0],
+                "pick_ctp": ctp_pick(ctx)[0],
                 **all_diagnostics(ctx, gi, tier1_cache=t1),
             }
             for k in LADDER:
@@ -97,6 +101,8 @@ def one_injected(ds, kind, shift_type, severity, fold, X, y, dom, cols, gi):
             row["oe_S0"] = oe_ratio(yt[evalu], preds["S0"])
             best = min(LADDER, key=lambda k: row[f"brier_{k}"])
             row["oracle"], row["brier_oracle"] = best, row[f"brier_{best}"]
+            bc = min(LADDER_CORE, key=lambda k: row[f"brier_{k}"])
+            row["oracle_core"], row["brier_oracle_core"] = bc, row[f"brier_{bc}"]
             hb, hg, hp = honest_oracle(
                 yt[evalu], preds, np.random.default_rng(rr.integers(2**32)))
             row["brier_oracle_honest"], row["oracle_honest_picks"] = hb, hp
