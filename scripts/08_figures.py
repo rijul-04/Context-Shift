@@ -69,12 +69,15 @@ def fig2_phase_diagram(ep: pd.DataFrame):
     cmap = plt.matplotlib.colors.LinearSegmentedColormap.from_list("seq", SEQ)
     im = ax.imshow(data, cmap=cmap, vmin=0, vmax=max(0.5, data.max()),
                    aspect="auto")
-    short = {"S0": "no update", "S1": "prior\ncorrection",
-             "S2": "intercept\nrecal", "S3": "logistic\nrecal",
-             "S4": "weighted\nrefit", "S5": "model\nrevision",
-             "S6": "pooled\nrefit", "S7": "target-only\nretrain"}
+    def wrap(label: str) -> str:
+        parts = label.split()
+        if len(parts) < 2:
+            return label
+        mid = len(parts) // 2
+        return " ".join(parts[:mid]) + "\n" + " ".join(parts[mid:])
+
     ax.set_xticks(range(len(LADDER)),
-                  [f"{k}\n{short[k]}" for k in LADDER], fontsize=8)
+                  [f"{k}\n{wrap(LABELS[k])}" for k in LADDER], fontsize=7)
     ax.set_yticks(range(len(tab.index)), [str(i) for i in tab.index])
     ax.set_ylabel("labelled cases at the new site")
     ax.grid(False)

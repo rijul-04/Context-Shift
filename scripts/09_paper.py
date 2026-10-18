@@ -104,6 +104,17 @@ def main():
         f"{t.replace('_', ' ')} {v:+.2f}"
         for (_, t), v in real_sites["gh"].head(3).items())
 
+    from src.csh.strategies import (LABELS as LADDER_LABELS,   # noqa: E402
+                                    LADDER as LADDER_ORDER,
+                                    NEEDS_LABELS as LADDER_NEEDS)
+    n_strategies = len(LADDER_ORDER)
+    _need = {True: r"$\geq 1$", False: "0"}
+    _sep = r" \\" + "\n"
+    ladder_rows = _sep.join(
+        "$" + k[0] + "_{" + k[1:] + "}$ & " + LADDER_LABELS[k] + " & "
+        + _need[LADDER_NEEDS[k]]
+        for k in LADDER_ORDER)
+
     def row(df, p, col):
         return df.loc[p, col] if p in df.index else float("nan")
 
@@ -172,7 +183,7 @@ for Clinical Prediction under Context Shift\vspace{{0.4em}}}}
 When a clinical risk model is deployed at a new site, the reflex is to retrain
 it. We ask a narrower question: given what changed and how few labelled
 outcomes the site has, \emph{{which}} update is worth applying? We formalise
-this as selection over a cost-ordered ladder of eight updates, from doing
+this as selection over a cost-ordered ladder of {n_strategies} updates, from doing
 nothing to a full retrain, and evaluate it across {n_dom} held-out sites in two
 open ICU datasets ({n_ep} real and {n_inj} injected-shift deployments).
 
@@ -242,7 +253,7 @@ which every strategy is scored and which only the scorer reads. Label-free
 strategies and the Tier~1 diagnostics may read $U_t$, including the features
 of patients in $E_t$: that is transductive, and it matches deployment, where
 a hospital holds its own records and lacks only the outcomes. A policy $\pi$ maps $(f, U_t, L_n)$ to one
-strategy from the ladder $S_0 \ldots S_7$ (Table~\ref{{tab:ladder}}). With
+strategy from the ladder of {n_strategies} (Table~\ref{{tab:ladder}}). With
 Brier score as the loss,
 \[
 \mathrm{{Regret}}(\pi) = \mathrm{{Brier}}_{{E_t}}(S_{{\pi}})
@@ -259,14 +270,7 @@ no-update Brier by more than $0.002$.
 \toprule
 & Update & Labels \\
 \midrule
-$S_0$ & no update & 0 \\
-$S_1$ & prior (prevalence) correction, damped EM & 0 \\
-$S_2$ & intercept recalibration & $\geq 1$ \\
-$S_3$ & logistic recalibration & $\geq 1$ \\
-$S_4$ & importance-weighted refit & 0 \\
-$S_5$ & model revision (top-10 coefficients) & $\geq 1$ \\
-$S_6$ & pooled refit, target upweighted & $\geq 1$ \\
-$S_7$ & target-only retrain & $\geq 1$ \\
+{ladder_rows} \\\\
 \bottomrule
 \end{{tabular}}
 \end{{table}}
