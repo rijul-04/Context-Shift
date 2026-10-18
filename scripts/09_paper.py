@@ -41,6 +41,12 @@ def main():
         knownsim = sim[sim["experiment"] == "known gain"]
     h7 = pd.read_csv(RESULTS / "h7_diagnosis.csv", index_col=0)
     h7.index.name = "injected shift"
+    h7_header = (" & ".join(["injected shift"]
+                            + [str(c) for c in h7.columns]) + r" \\")
+    h7_body = "\n".join(
+        " & ".join([str(idx)] + [str(int(v)) for v in r]) + r" \\"
+        for idx, r in h7.iterrows())
+    h7_cols = "l" + "c" * len(h7.columns)
     rel = pd.read_csv(RESULTS / "reliability_example.csv", index_col=0)
     ep = pd.read_pickle(PROC / "episodes_real.pkl")
     inj = pd.read_pickle(PROC / "episodes_injected.pkl")
@@ -524,7 +530,13 @@ largely learned how many labels it had, not what had changed.
 \begin{{table}}[t]\centering\small
 \caption{{Injected shifts: which feature group the diagnostics flag, at $n=0$.}}
 \label{{tab:h7}}
-{h7.to_latex()}
+\begin{{tabular}}{{{h7_cols}}}
+\toprule
+{h7_header}
+\midrule
+{h7_body}
+\bottomrule
+\end{{tabular}}
 \end{{table}}
 
 \section{{Discussion}}
